@@ -350,6 +350,17 @@ func (w *Worker) executeRun(job models.Job, runID, queueID uuid.UUID) {
 	w.cleanupQueue(ctx, queueID)
 	_ = w.docker.RemoveContainer(ctx, containerID)
 
+	// Send notification if configured
+	var errMsg string
+	if timedOut {
+		errMsg = fmt.Sprintf("timeout exceeded (%ds limit)", job.TimeoutSeconds)
+	} else if result.err != nil {
+		errMsg = result.err.Error()
+	} else if exitCode != 0 {
+		errMsg = fmt.Sprintf("exit code %d", exitCode)
+	}
+	w.sendNotification(ctx, job.ID, runID, status, exitCode, duration.Milliseconds(), errMsg)
+
 	log.Printf("[worker] Run %s completed: status=%s exitCode=%d duration=%dms logs=%d bytes",
 		runID, status, exitCode, duration.Milliseconds(), len(logStr))
 }
