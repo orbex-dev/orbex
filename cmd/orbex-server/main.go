@@ -15,6 +15,7 @@ import (
 	"github.com/orbex-dev/orbex/internal/config"
 	"github.com/orbex-dev/orbex/internal/database"
 	"github.com/orbex-dev/orbex/internal/docker"
+	"github.com/orbex-dev/orbex/internal/worker"
 )
 
 func main() {
@@ -59,6 +60,17 @@ func main() {
 	defer dockerClient.Close()
 	log.Println("✓ Docker connected")
 
+	// Start background worker
+	w := worker.New(db, dockerClient, worker.Config{
+		MaxConcurrent: cfg.MaxConcurrentRuns,
+		PollInterval:  time.Second,
+	})
+
+	workerCtx, workerCancel := context.WithCancel(ctx)
+	go w.Run(workerCtx)
+	go w.RunReaper(workerCtx)
+	log.Printf("✓ Worker started (maxConcurrent=%d)", cfg.MaxConcurrentRuns)
+
 	// Create router
 	router := api.NewRouter(db, dockerClient)
 
@@ -86,6 +98,10 @@ func main() {
 
 	<-quit
 	log.Println("\nShutting down gracefully...")
+
+	// Stop worker first
+	workerCancel()
+	w.Shutdown(30 * time.Second)
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

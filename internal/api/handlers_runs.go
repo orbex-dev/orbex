@@ -1,9 +1,7 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -13,12 +11,6 @@ import (
 	"github.com/orbex-dev/orbex/internal/docker"
 	"github.com/orbex-dev/orbex/internal/models"
 )
-
-// waitResult holds the result of a container wait operation.
-type waitResult struct {
-	exitCode int64
-	err      error
-}
 
 // RunHandler handles job run operations.
 type RunHandler struct {
@@ -87,135 +79,9 @@ func (h *RunHandler) TriggerRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Execute the run in background
-	go h.executeRun(job, run)
+	// Worker will pick this up via SKIP LOCKED polling
 
 	writeJSON(w, http.StatusAccepted, run)
-}
-
-// executeRun pulls the image, creates a container, runs it, and captures the result.
-func (h *RunHandler) executeRun(job models.Job, run models.JobRun) {
-	ctx := context.Background()
-	now := time.Now()
-
-	// Recover from panics so a run never gets stuck in "running" state
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Printf("[executeRun] PANIC recovered for run %s: %v\n", run.ID, r)
-			h.failRun(ctx, run.ID, now, fmt.Sprintf("Internal error (panic): %v", r))
-		}
-	}()
-
-	fmt.Printf("[executeRun] Starting run %s for job %s (image: %s)\n", run.ID, job.Name, job.Image)
-	fmt.Printf("[executeRun] Command: %v (len=%d)\n", job.Command, len(job.Command))
-
-	// Mark as running
-	if _, err := h.db.Pool.Exec(ctx, `
-		UPDATE job_runs SET status = 'running'::run_status, started_at = $1 WHERE id = $2
-	`, now, run.ID); err != nil {
-		fmt.Printf("[executeRun] ERROR marking run as running: %v\n", err)
-	}
-
-	// Pull image
-	if err := h.docker.PullImage(ctx, job.Image); err != nil {
-		h.failRun(ctx, run.ID, now, fmt.Sprintf("Failed to pull image: %v", err))
-		return
-	}
-
-	// Create container
-	containerName := fmt.Sprintf("orbex-%s-%s", job.Name, run.ID.String()[:8])
-	containerID, err := h.docker.CreateContainer(ctx, docker.ContainerConfig{
-		Image:         job.Image,
-		Command:       job.Command,
-		Env:           job.Env,
-		MemoryMB:      job.MemoryMB,
-		CPUMillicores: job.CPUMillicores,
-		Name:          containerName,
-	})
-	if err != nil {
-		h.failRun(ctx, run.ID, now, fmt.Sprintf("Failed to create container: %v", err))
-		return
-	}
-
-	// Store container ID
-	fmt.Printf("[executeRun] Container created: %s (name: %s)\n", containerID[:12], containerName)
-	_, _ = h.db.Pool.Exec(ctx, `
-		UPDATE job_runs SET container_id = $1 WHERE id = $2
-	`, containerID, run.ID)
-
-	// IMPORTANT: Set up wait channel BEFORE starting container to avoid race condition
-	// If container exits before we call WaitContainer, the wait would block forever
-	waitCh := make(chan waitResult, 1)
-	go func() {
-		exitCode, err := h.docker.WaitContainer(ctx, containerID)
-		waitCh <- waitResult{exitCode: exitCode, err: err}
-	}()
-
-	// Start container
-	fmt.Printf("[executeRun] Starting container %s\n", containerID[:12])
-	if err := h.docker.StartContainer(ctx, containerID); err != nil {
-		h.failRun(ctx, run.ID, now, fmt.Sprintf("Failed to start container: %v", err))
-		_ = h.docker.RemoveContainer(ctx, containerID)
-		return
-	}
-	fmt.Printf("[executeRun] Container %s started, waiting for exit...\n", containerID[:12])
-
-	// Wait for container to finish
-	result := <-waitCh
-	exitCode := result.exitCode
-	err = result.err
-
-	finishedAt := time.Now()
-	durationMs := finishedAt.Sub(now).Milliseconds()
-	fmt.Printf("[executeRun] Container %s finished: exitCode=%d, duration=%dms, err=%v\n", containerID[:12], exitCode, durationMs, err)
-
-	// Get logs before removing the container
-	logs, logsErr := h.docker.GetLogs(ctx, containerID, "1000")
-	if logsErr != nil {
-		fmt.Printf("[executeRun] WARNING: Failed to get logs: %v\n", logsErr)
-	}
-	fmt.Printf("[executeRun] Logs captured: %d bytes\n", len(logs))
-
-	// Determine final status
-	status := models.RunStatusSucceeded
-	var errorMsg *string
-	if err != nil {
-		status = models.RunStatusFailed
-		msg := fmt.Sprintf("Container wait error: %v", err)
-		errorMsg = &msg
-	} else if exitCode != 0 {
-		status = models.RunStatusFailed
-		msg := fmt.Sprintf("Process exited with code %d", exitCode)
-		errorMsg = &msg
-	}
-
-	exitCodeInt := int(exitCode)
-	if _, err := h.db.Pool.Exec(ctx, `
-		UPDATE job_runs
-		SET status = $1::run_status, exit_code = $2, finished_at = $3, duration_ms = $4,
-		    logs_tail = $5, error_message = $6
-		WHERE id = $7
-	`, string(status), exitCodeInt, finishedAt, durationMs, logs, errorMsg, run.ID); err != nil {
-		fmt.Printf("[executeRun] ERROR updating final status: %v\n", err)
-	}
-
-	// Remove from queue
-	_, _ = h.db.Pool.Exec(ctx, `DELETE FROM job_queue WHERE run_id = $1`, run.ID)
-
-	// Cleanup container
-	_ = h.docker.RemoveContainer(ctx, containerID)
-	fmt.Printf("[executeRun] Run %s completed with status: %s\n", run.ID, status)
-}
-
-// failRun marks a run as failed with an error message.
-func (h *RunHandler) failRun(ctx context.Context, runID uuid.UUID, startedAt time.Time, errorMsg string) {
-	finishedAt := time.Now()
-	durationMs := finishedAt.Sub(startedAt).Milliseconds()
-	_, _ = h.db.Pool.Exec(ctx, `
-		UPDATE job_runs
-		SET status = 'failed'::run_status, error_message = $1, finished_at = $2, duration_ms = $3
-		WHERE id = $4
-	`, errorMsg, finishedAt, durationMs, runID)
 }
 
 // ListRuns returns all runs for a job.

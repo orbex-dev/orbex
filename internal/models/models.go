@@ -67,6 +67,7 @@ type JobRun struct {
 	StartedAt    *time.Time `json:"started_at,omitempty"`
 	FinishedAt   *time.Time `json:"finished_at,omitempty"`
 	PausedAt     *time.Time `json:"paused_at,omitempty"`
+	HeartbeatAt  *time.Time `json:"heartbeat_at,omitempty"`
 	DurationMs   *int64     `json:"duration_ms,omitempty"`
 	LogsTail     *string    `json:"logs_tail,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`

@@ -10,10 +10,11 @@ import (
 
 // Config holds all configuration for the application.
 type Config struct {
-	DatabaseURL string
-	Port        int
-	Env         string // "development", "production"
-	DockerHost  string
+	DatabaseURL       string
+	Port              int
+	Env               string // "development", "production"
+	DockerHost        string
+	MaxConcurrentRuns int
 }
 
 // Load reads configuration from environment variables.
@@ -27,11 +28,17 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid PORT: %w", err)
 	}
 
+	maxConcurrent, err := strconv.Atoi(getEnv("MAX_CONCURRENT_RUNS", "5"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid MAX_CONCURRENT_RUNS: %w", err)
+	}
+
 	cfg := &Config{
-		DatabaseURL: getEnv("DATABASE_URL", "postgres://orbex:orbex@localhost:5432/orbex?sslmode=disable"),
-		Port:        port,
-		Env:         getEnv("ENV", "development"),
-		DockerHost:  getEnv("DOCKER_HOST", "unix:///var/run/docker.sock"),
+		DatabaseURL:       getEnv("DATABASE_URL", "postgres://orbex:orbex@localhost:5432/orbex?sslmode=disable"),
+		Port:              port,
+		Env:               getEnv("ENV", "development"),
+		DockerHost:        getEnv("DOCKER_HOST", "unix:///var/run/docker.sock"),
+		MaxConcurrentRuns: maxConcurrent,
 	}
 
 	if cfg.DatabaseURL == "" {
