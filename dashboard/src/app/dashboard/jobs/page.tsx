@@ -139,7 +139,7 @@ export default function JobsPage() {
             ) : (
                 <div className="space-y-3">
                     {jobs.map(job => (
-                        <a key={job.id} href={`/jobs/${job.id}`}
+                        <a key={job.id} href={`/dashboard/jobs/${job.id}`}
                             className="flex items-center justify-between bg-zinc-900 border border-zinc-800 rounded-xl p-5 hover:border-zinc-700 transition-colors group"
                         >
                             <div>

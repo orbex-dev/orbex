@@ -86,7 +86,7 @@ export default function RunDetailPage() {
             {/* Header */}
             <div className="flex items-start justify-between mb-6">
                 <div>
-                    <a href={`/jobs/${run.job_id}`} className="text-xs text-zinc-500 hover:text-zinc-400 transition-colors">← Back to Job</a>
+                    <a href={`/dashboard/jobs/${run.job_id}`} className="text-xs text-zinc-500 hover:text-zinc-400 transition-colors">← Back to Job</a>
                     <h1 className="text-2xl font-bold mt-1">
                         Run <span className="font-mono text-zinc-400">{run.id.slice(0, 8)}</span>
                     </h1>

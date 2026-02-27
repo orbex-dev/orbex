@@ -52,7 +52,7 @@ export default function JobDetailPage() {
         if (!confirm('Are you sure you want to delete this job?')) return;
         try {
             await api.deleteJob(jobId);
-            window.location.href = '/jobs';
+            window.location.href = '/dashboard/jobs';
         } catch (err) {
             alert(`Failed to delete: ${err}`);
         }
@@ -71,7 +71,7 @@ export default function JobDetailPage() {
             {/* Header */}
             <div className="flex items-start justify-between mb-6">
                 <div>
-                    <a href="/jobs" className="text-xs text-zinc-500 hover:text-zinc-400 transition-colors">← Back to Jobs</a>
+                    <a href="/dashboard/jobs" className="text-xs text-zinc-500 hover:text-zinc-400 transition-colors">← Back to Jobs</a>
                     <h1 className="text-2xl font-bold mt-1">{job.name}</h1>
                     <p className="text-sm text-zinc-500 font-mono">{job.image}</p>
                 </div>
@@ -130,7 +130,7 @@ export default function JobDetailPage() {
                             {runs.map(run => (
                                 <tr key={run.id} className="border-b border-zinc-800/50 hover:bg-zinc-800/30 transition-colors">
                                     <td className="p-4">
-                                        <a href={`/runs/${run.id}`} className="text-sm font-mono text-zinc-300 hover:text-violet-400 transition-colors">
+                                        <a href={`/dashboard/runs/${run.id}`} className="text-sm font-mono text-zinc-300 hover:text-violet-400 transition-colors">
                                             {run.id.slice(0, 8)}
                                         </a>
                                     </td>
