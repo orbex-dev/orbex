@@ -50,6 +50,7 @@ type Job struct {
 	CPUMillicores  int               `json:"cpu_millicores"`
 	TimeoutSeconds int               `json:"timeout_seconds"`
 	Schedule       *string           `json:"schedule,omitempty"`
+	WebhookToken   *string           `json:"webhook_token,omitempty"`
 	IsActive       bool              `json:"is_active"`
 	CreatedAt      time.Time         `json:"created_at"`
 	UpdatedAt      time.Time         `json:"updated_at"`

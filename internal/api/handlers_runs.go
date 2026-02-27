@@ -84,6 +84,63 @@ func (h *RunHandler) TriggerRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, run)
 }
 
+// WebhookTrigger accepts a webhook token to trigger a job run without API key auth.
+func (h *RunHandler) WebhookTrigger(w http.ResponseWriter, r *http.Request) {
+	token := chi.URLParam(r, "token")
+	if token == "" {
+		writeJSON(w, http.StatusBadRequest, models.ErrorResponse{
+			Error: "invalid_request", Message: "Missing webhook token",
+		})
+		return
+	}
+
+	// Look up job by webhook token
+	var job models.Job
+	var envJSON []byte
+	err := h.db.Pool.QueryRow(r.Context(), `
+		SELECT id, user_id, name, image, command, env, memory_mb, cpu_millicores, timeout_seconds
+		FROM jobs
+		WHERE webhook_token = $1 AND is_active = true
+	`, token).Scan(
+		&job.ID, &job.UserID, &job.Name, &job.Image, &job.Command,
+		&envJSON, &job.MemoryMB, &job.CPUMillicores, &job.TimeoutSeconds,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, models.ErrorResponse{
+			Error: "not_found", Message: "Invalid webhook token",
+		})
+		return
+	}
+	_ = json.Unmarshal(envJSON, &job.Env)
+
+	// Create job run record
+	var run models.JobRun
+	err = h.db.Pool.QueryRow(r.Context(), `
+		INSERT INTO job_runs (job_id, user_id, status)
+		VALUES ($1, $2, 'pending'::run_status)
+		RETURNING id, job_id, user_id, status, created_at
+	`, job.ID, job.UserID).Scan(&run.ID, &run.JobID, &run.UserID, &run.Status, &run.CreatedAt)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, models.ErrorResponse{
+			Error: "internal_error", Message: "Failed to create run",
+		})
+		return
+	}
+
+	// Enqueue
+	_, err = h.db.Pool.Exec(r.Context(), `
+		INSERT INTO job_queue (job_id, run_id) VALUES ($1, $2)
+	`, job.ID, run.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, models.ErrorResponse{
+			Error: "internal_error", Message: "Failed to enqueue run",
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, run)
+}
+
 // ListRuns returns all runs for a job.
 func (h *RunHandler) ListRuns(w http.ResponseWriter, r *http.Request) {
 	user := UserFromContext(r.Context())

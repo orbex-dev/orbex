@@ -69,6 +69,7 @@ func main() {
 	workerCtx, workerCancel := context.WithCancel(ctx)
 	go w.Run(workerCtx)
 	go w.RunReaper(workerCtx)
+	go w.RunScheduler(workerCtx)
 	log.Printf("✓ Worker started (maxConcurrent=%d)", cfg.MaxConcurrentRuns)
 
 	// Create router

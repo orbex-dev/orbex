@@ -36,6 +36,9 @@ func NewRouter(db *database.DB, dockerClient *docker.Client) http.Handler {
 	jobHandler := NewJobHandler(db)
 	runHandler := NewRunHandler(db, dockerClient)
 
+	// Webhook trigger (no auth — uses webhook token in URL)
+	r.Post("/api/v1/webhooks/{token}/trigger", runHandler.WebhookTrigger)
+
 	// API v1 routes
 	r.Route("/api/v1", func(r chi.Router) {
 
@@ -58,6 +61,7 @@ func NewRouter(db *database.DB, dockerClient *docker.Client) http.Handler {
 
 			// Job runs
 			r.Post("/jobs/{jobID}/run", runHandler.TriggerRun)
+			r.Post("/jobs/{jobID}/webhook", jobHandler.GenerateWebhookToken)
 			r.Get("/jobs/{jobID}/runs", runHandler.ListRuns)
 
 			// Run management

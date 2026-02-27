@@ -1,7 +1,9 @@
 package api
 
 import (
+	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -183,4 +185,43 @@ func (h *JobHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// GenerateWebhookToken creates or regenerates a webhook token for a job.
+func (h *JobHandler) GenerateWebhookToken(w http.ResponseWriter, r *http.Request) {
+	user := UserFromContext(r.Context())
+	jobID, err := uuid.Parse(chi.URLParam(r, "jobID"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, models.ErrorResponse{
+			Error: "invalid_request", Message: "Invalid job ID",
+		})
+		return
+	}
+
+	// Generate random token
+	tokenBytes := make([]byte, 32)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		writeJSON(w, http.StatusInternalServerError, models.ErrorResponse{
+			Error: "internal_error", Message: "Failed to generate token",
+		})
+		return
+	}
+	token := fmt.Sprintf("whk_%x", tokenBytes)
+
+	// Update the job with the new token
+	tag, err := h.db.Pool.Exec(r.Context(), `
+		UPDATE jobs SET webhook_token = $1, updated_at = now()
+		WHERE id = $2 AND user_id = $3
+	`, token, jobID, user.ID)
+	if err != nil || tag.RowsAffected() == 0 {
+		writeJSON(w, http.StatusNotFound, models.ErrorResponse{
+			Error: "not_found", Message: "Job not found",
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"webhook_token": token,
+		"trigger_url":   fmt.Sprintf("/api/v1/webhooks/%s/trigger", token),
+	})
 }

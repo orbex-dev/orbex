@@ -9,6 +9,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/moby/moby/api v1.53.0
 	github.com/moby/moby/client v0.2.2
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/vgarvardt/pgx-google-uuid/v5 v5.6.0
 	golang.org/x/crypto v0.48.0
 )

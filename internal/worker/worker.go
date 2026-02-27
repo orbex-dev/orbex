@@ -255,8 +255,34 @@ func (w *Worker) executeRun(job models.Job, runID, queueID uuid.UUID) {
 	heartbeatCtx, heartbeatCancel := context.WithCancel(ctx)
 	go w.emitHeartbeat(heartbeatCtx, runID)
 
-	// Wait for container to exit
-	result := <-waitCh
+	// Wait for container to exit (with timeout enforcement)
+	var result struct {
+		exitCode int64
+		err      error
+	}
+	timedOut := false
+
+	if job.TimeoutSeconds > 0 {
+		timer := time.NewTimer(time.Duration(job.TimeoutSeconds) * time.Second)
+		select {
+		case wr := <-waitCh:
+			timer.Stop()
+			result.exitCode = wr.exitCode
+			result.err = wr.err
+		case <-timer.C:
+			timedOut = true
+			log.Printf("[worker] Run %s timed out after %ds — killing container", runID, job.TimeoutSeconds)
+			_ = w.docker.StopContainer(ctx, containerID, 5)
+			wr := <-waitCh // Wait for container to actually stop
+			result.exitCode = wr.exitCode
+			result.err = wr.err
+		}
+	} else {
+		wr := <-waitCh
+		result.exitCode = wr.exitCode
+		result.err = wr.err
+	}
+
 	heartbeatCancel()
 	duration := time.Since(startedAt)
 
@@ -269,7 +295,21 @@ func (w *Worker) executeRun(job models.Job, runID, queueID uuid.UUID) {
 	// Determine final status
 	var status string
 	exitCode := result.exitCode
-	if result.err != nil {
+
+	if timedOut {
+		status = "failed"
+		_, updateErr := w.db.Pool.Exec(ctx, `
+			UPDATE job_runs SET 
+				status = 'failed'::run_status, exit_code = $1, 
+				error_message = $2, finished_at = $3, duration_ms = $4, 
+				logs_tail = $5, heartbeat_at = NULL
+			WHERE id = $6
+		`, exitCode, fmt.Sprintf("timeout exceeded (%ds limit)", job.TimeoutSeconds),
+			time.Now(), duration.Milliseconds(), logStr, runID)
+		if updateErr != nil {
+			log.Printf("[worker] ERROR updating timeout status for %s: %v", runID, updateErr)
+		}
+	} else if result.err != nil {
 		status = "failed"
 		errMsg := result.err.Error()
 		_, updateErr := w.db.Pool.Exec(ctx, `
