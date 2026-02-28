@@ -12,6 +12,7 @@ const (
 	heartbeatInterval = 10 * time.Second
 	reaperInterval    = 30 * time.Second
 	staleThreshold    = 60 * time.Second
+	maxPauseDuration  = 24 * time.Hour // Auto-kill paused containers after this duration
 )
 
 // emitHeartbeat updates heartbeat_at for a running job until ctx is cancelled.
@@ -37,7 +38,7 @@ func (w *Worker) emitHeartbeat(ctx context.Context, runID uuid.UUID) {
 
 // RunReaper starts the stale run reaper loop. Blocks until ctx is cancelled.
 func (w *Worker) RunReaper(ctx context.Context) {
-	log.Printf("[reaper] Started (interval=%s, staleThreshold=%s)", reaperInterval, staleThreshold)
+	log.Printf("[reaper] Started (interval=%s, staleThreshold=%s, maxPauseDuration=%s)", reaperInterval, staleThreshold, maxPauseDuration)
 
 	ticker := time.NewTicker(reaperInterval)
 	defer ticker.Stop()
@@ -49,6 +50,7 @@ func (w *Worker) RunReaper(ctx context.Context) {
 			return
 		case <-ticker.C:
 			w.reapStaleRuns(ctx)
+			w.reapPausedContainers(ctx)
 		}
 	}
 }
@@ -109,5 +111,58 @@ func (w *Worker) reapStaleRuns(ctx context.Context) {
 		_, _ = w.db.Pool.Exec(ctx, `DELETE FROM job_queue WHERE run_id = $1`, sr.ID)
 
 		log.Printf("[reaper] Reaped stale run %s", sr.ID)
+	}
+}
+
+// reapPausedContainers kills paused containers that have exceeded the max pause duration.
+func (w *Worker) reapPausedContainers(ctx context.Context) {
+	rows, err := w.db.Pool.Query(ctx, `
+		SELECT id, container_id FROM job_runs
+		WHERE status = 'paused'::run_status
+		  AND paused_at IS NOT NULL
+		  AND paused_at < now() - $1::interval
+	`, maxPauseDuration.String())
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	var paused []staleRun
+	for rows.Next() {
+		var sr staleRun
+		if err := rows.Scan(&sr.ID, &sr.ContainerID); err != nil {
+			continue
+		}
+		paused = append(paused, sr)
+	}
+
+	for _, sr := range paused {
+		log.Printf("[reaper] Auto-killing paused run %s (exceeded %s pause limit)", sr.ID, maxPauseDuration)
+
+		// Kill the container
+		if sr.ContainerID != nil && *sr.ContainerID != "" {
+			if err := w.docker.StopContainer(ctx, *sr.ContainerID, 10); err != nil {
+				log.Printf("[reaper] Warning: failed to stop paused container for %s: %v", sr.ID, err)
+			}
+			_ = w.docker.RemoveContainer(ctx, *sr.ContainerID)
+		}
+
+		// Mark as cancelled
+		_, err := w.db.Pool.Exec(ctx, `
+			UPDATE job_runs SET
+				status = 'cancelled'::run_status,
+				error_message = 'auto-killed: exceeded maximum pause duration (24h)',
+				finished_at = now(),
+				heartbeat_at = NULL
+			WHERE id = $1
+		`, sr.ID)
+		if err != nil {
+			log.Printf("[reaper] ERROR marking paused run %s as cancelled: %v", sr.ID, err)
+		}
+
+		// Cleanup queue
+		_, _ = w.db.Pool.Exec(ctx, `DELETE FROM job_queue WHERE run_id = $1`, sr.ID)
+
+		log.Printf("[reaper] Reaped paused run %s", sr.ID)
 	}
 }
