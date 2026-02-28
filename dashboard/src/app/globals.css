@@ -1,30 +1,392 @@
 @import "tailwindcss";
 
-@layer base {
-  :root {
-    --color-background: #09090b;
-    --color-foreground: #fafafa;
+:root {
+  --font-sans: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: var(--font-geist-mono), 'SF Mono', monospace;
+
+  /* Accent system */
+  --lime: #84cc16;
+  --lime-dim: rgba(132, 204, 22, 0.12);
+  --coral: #f97316;
+  --coral-dim: rgba(249, 115, 22, 0.12);
+  --electric: #3b82f6;
+  --electric-dim: rgba(59, 130, 246, 0.12);
+  --timeout: #eab308;
+  --timeout-dim: rgba(234, 179, 8, 0.12);
+  --surface-0: #09090b;
+  --surface-1: #111113;
+  --surface-2: #18181b;
+  --surface-3: #27272a;
+  --border: rgba(63, 63, 70, 0.5);
+  --border-hover: rgba(113, 113, 122, 0.5);
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--surface-0);
+}
+
+/* ─── Scrollbar ─── */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--surface-3);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}
+
+/* ─── Surface cards ─── */
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.card:hover {
+  border-color: var(--border-hover);
+}
+
+.card-interactive {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+.card-interactive:hover {
+  border-color: var(--border-hover);
+  background: var(--surface-2);
+  transform: translateY(-1px);
+}
+
+/* ─── Glow effects ─── */
+.glow-lime {
+  box-shadow: 0 0 24px rgba(132, 204, 22, 0.1);
+}
+
+.glow-coral {
+  box-shadow: 0 0 24px rgba(249, 115, 22, 0.1);
+}
+
+.glow-electric {
+  box-shadow: 0 0 24px rgba(59, 130, 246, 0.1);
+}
+
+/* ─── Accent backgrounds ─── */
+.bg-lime-dim {
+  background: var(--lime-dim);
+}
+
+.bg-coral-dim {
+  background: var(--coral-dim);
+}
+
+.bg-electric-dim {
+  background: var(--electric-dim);
+}
+
+.bg-timeout-dim {
+  background: var(--timeout-dim);
+}
+
+/* ─── Status pulse ─── */
+@keyframes pulse-dot {
+
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.4;
+    transform: scale(1.6);
   }
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-}
-::-webkit-scrollbar-track {
-  background: #18181b;
-}
-::-webkit-scrollbar-thumb {
-  background: #3f3f46;
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #52525b;
+.pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
 }
 
-/* Log viewer */
-.log-viewer {
-  font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+/* ─── Skeleton loader ─── */
+@keyframes shimmer {
+  0% {
+    background-position: -200px 0;
+  }
+
+  100% {
+    background-position: calc(200px + 100%) 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-2) 0%, var(--surface-3) 50%, var(--surface-2) 100%);
+  background-size: 200px 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 6px;
+}
+
+/* ─── Entry animations ─── */
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.3s ease-out forwards;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out forwards;
+}
+
+.animate-scale-in {
+  animation: scale-in 0.2s ease-out forwards;
+}
+
+/* Stagger delays */
+.delay-1 {
+  animation-delay: 50ms;
+  opacity: 0;
+}
+
+.delay-2 {
+  animation-delay: 100ms;
+  opacity: 0;
+}
+
+.delay-3 {
+  animation-delay: 150ms;
+  opacity: 0;
+}
+
+.delay-4 {
+  animation-delay: 200ms;
+  opacity: 0;
+}
+
+/* ─── Subtle grid background ─── */
+.bg-grid {
+  background-image:
+    linear-gradient(rgba(63, 63, 70, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(63, 63, 70, 0.06) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* ─── Input styles ─── */
+.input {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
   font-size: 13px;
-  line-height: 1.6;
+  color: #e4e4e7;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.input::placeholder {
+  color: #52525b;
+}
+
+.input:focus {
+  border-color: rgba(59, 130, 246, 0.5);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+.input-mono {
+  font-family: var(--font-mono);
+}
+
+/* ─── Button styles ─── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 8px;
+  transition: all 0.15s;
+  cursor: pointer;
+  border: none;
+}
+
+.btn-primary {
+  background: var(--electric);
+  color: white;
+}
+
+.btn-primary:hover {
+  background: #2563eb;
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.2);
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: #a1a1aa;
+  border: 1px solid var(--border);
+}
+
+.btn-ghost:hover {
+  background: var(--surface-2);
+  color: #e4e4e7;
+  border-color: var(--border-hover);
+}
+
+.btn-danger {
+  background: transparent;
+  color: #a1a1aa;
+  border: 1px solid var(--border);
+}
+
+.btn-danger:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.btn-lime {
+  background: var(--lime-dim);
+  color: var(--lime);
+  border: 1px solid rgba(132, 204, 22, 0.2);
+}
+
+.btn-lime:hover {
+  background: rgba(132, 204, 22, 0.2);
+}
+
+.btn-sm {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+/* ─── Mono text ─── */
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+.font-sans {
+  font-family: var(--font-sans);
+}
+
+/* ─── Command palette backdrop ─── */
+.cmd-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 100;
+}
+
+/* ─── Dialog ─── */
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dialog-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+}
+
+.dialog-content {
+  position: relative;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8);
+  max-width: 520px;
+  width: calc(100% - 32px);
+}
+
+/* ─── Toast ─── */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 200;
+  padding: 12px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 10px;
+  border: 1px solid;
+  animation: toast-in 0.3s ease-out;
+}
+
+.toast-success {
+  background: rgba(132, 204, 22, 0.08);
+  color: var(--lime);
+  border-color: rgba(132, 204, 22, 0.2);
+}
+
+.toast-error {
+  background: rgba(239, 68, 68, 0.08);
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.2);
 }

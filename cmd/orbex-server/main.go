@@ -15,6 +15,7 @@ import (
 	"github.com/orbex-dev/orbex/internal/config"
 	"github.com/orbex-dev/orbex/internal/database"
 	"github.com/orbex-dev/orbex/internal/docker"
+	"github.com/orbex-dev/orbex/internal/storage"
 	"github.com/orbex-dev/orbex/internal/worker"
 )
 
@@ -60,6 +61,20 @@ func main() {
 	defer dockerClient.Close()
 	log.Println("✓ Docker connected")
 
+	// Connect to MinIO storage
+	log.Println("Connecting to MinIO...")
+	storageClient, err := storage.New(
+		cfg.MinioEndpoint,
+		cfg.MinioAccessKey,
+		cfg.MinioSecretKey,
+		cfg.MinioBucket,
+		cfg.MinioUseSSL,
+	)
+	if err != nil {
+		log.Fatalf("Failed to connect to MinIO: %v", err)
+	}
+	log.Println("✓ MinIO connected")
+
 	// Start background worker
 	w := worker.New(db, dockerClient, worker.Config{
 		MaxConcurrent: cfg.MaxConcurrentRuns,
@@ -73,7 +88,7 @@ func main() {
 	log.Printf("✓ Worker started (maxConcurrent=%d)", cfg.MaxConcurrentRuns)
 
 	// Create router
-	router := api.NewRouter(db, dockerClient)
+	router := api.NewRouter(db, dockerClient, storageClient, cfg)
 
 	// Create HTTP server
 	srv := &http.Server{

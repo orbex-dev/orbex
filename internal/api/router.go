@@ -7,12 +7,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/orbex-dev/orbex/internal/config"
 	"github.com/orbex-dev/orbex/internal/database"
 	"github.com/orbex-dev/orbex/internal/docker"
+	"github.com/orbex-dev/orbex/internal/storage"
 )
 
 // NewRouter creates and configures the HTTP router with all routes.
-func NewRouter(db *database.DB, dockerClient *docker.Client) http.Handler {
+func NewRouter(db *database.DB, dockerClient *docker.Client, storageClient *storage.Client, cfg *config.Config) http.Handler {
 	r := chi.NewRouter()
 
 	// Global middleware

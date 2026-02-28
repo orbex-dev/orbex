@@ -15,7 +15,7 @@ export default function LandingPage() {
                     <div className="flex items-center gap-6">
                         <a href="https://github.com/orbex-dev/orbex" className="text-sm text-zinc-400 hover:text-zinc-200 transition-colors">GitHub</a>
                         <a href="/docs" className="text-sm text-zinc-400 hover:text-zinc-200 transition-colors">Docs</a>
-                        <a href="/dashboard" className="px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium rounded-lg transition-colors">
+                        <a href="/login" className="px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium rounded-lg transition-colors">
                             Dashboard →
                         </a>
                     </div>
@@ -41,7 +41,7 @@ export default function LandingPage() {
                         with scheduling, monitoring, and real-time observability. Built for teams that move fast.
                     </p>
                     <div className="flex items-center justify-center gap-4 mt-10">
-                        <a href="/dashboard" className="px-6 py-3 bg-violet-600 hover:bg-violet-500 text-white font-medium rounded-xl transition-all hover:shadow-lg hover:shadow-violet-500/20">
+                        <a href="/login" className="px-6 py-3 bg-violet-600 hover:bg-violet-500 text-white font-medium rounded-xl transition-all hover:shadow-lg hover:shadow-violet-500/20">
                             Get Started Free
                         </a>
                         <a href="https://github.com/orbex-dev/orbex" className="px-6 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium rounded-xl transition-colors border border-zinc-700">
