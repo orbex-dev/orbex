@@ -38,9 +38,13 @@ func NewRouter(db *database.DB, dockerClient *docker.Client, storageClient *stor
 	jobHandler := NewJobHandler(db)
 	runHandler := NewRunHandler(db, dockerClient)
 	uploadHandler := NewUploadHandler(db, storageClient)
+	githubHandler := NewGithubHandler(db, storageClient, cfg)
 
 	// Webhook trigger (no auth — uses webhook token in URL)
 	r.Post("/api/v1/webhooks/{token}/trigger", runHandler.WebhookTrigger)
+
+	// GitHub webhook (no auth — uses GitHub signature)
+	r.Post("/api/v1/webhooks/github", githubHandler.GithubWebhook)
 
 	// API v1 routes
 	r.Route("/api/v1", func(r chi.Router) {
@@ -50,6 +54,10 @@ func NewRouter(db *database.DB, dockerClient *docker.Client, storageClient *stor
 		r.Post("/auth/api-keys", authHandler.GenerateBootstrapKey)
 		r.Post("/auth/login", authHandler.Login)
 		r.Post("/auth/logout", authHandler.Logout)
+
+		// GitHub OAuth (public — starts OAuth flow)
+		r.Get("/auth/github", githubHandler.StartOAuth)
+		r.Get("/auth/github/callback", githubHandler.OAuthCallback)
 
 		// Protected routes (require API key OR session cookie)
 		r.Group(func(r chi.Router) {
@@ -63,6 +71,11 @@ func NewRouter(db *database.DB, dockerClient *docker.Client, storageClient *stor
 
 			// API key management
 			r.Post("/auth/keys", authHandler.CreateAPIKey)
+
+			// GitHub status & repos
+			r.Get("/github/status", githubHandler.GetGithubStatus)
+			r.Get("/github/repos", githubHandler.ListRepos)
+			r.Get("/github/repos/{owner}/{repo}/branches", githubHandler.ListBranches)
 
 			// Jobs CRUD
 			r.Post("/jobs", jobHandler.Create)
