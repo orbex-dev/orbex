@@ -85,6 +85,7 @@ func main() {
 	go w.Run(workerCtx)
 	go w.RunReaper(workerCtx)
 	go w.RunScheduler(workerCtx)
+	go w.RunBuilder(workerCtx)
 	log.Printf("✓ Worker started (maxConcurrent=%d)", cfg.MaxConcurrentRuns)
 
 	// Create router
