@@ -363,6 +363,8 @@ func (w *Worker) executeRun(job models.Job, runID, queueID uuid.UUID) {
 		if updateErr != nil {
 			log.Printf("[worker] ERROR updating succeeded status for %s: %v", runID, updateErr)
 		}
+		// Update job stats for anomaly detection baseline
+		w.updateJobStats(ctx, job.ID, duration.Milliseconds())
 	} else {
 		status = "failed"
 		_, updateErr := w.db.Pool.Exec(ctx, `
