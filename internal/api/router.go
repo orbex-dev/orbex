@@ -42,13 +42,21 @@ func NewRouter(db *database.DB, dockerClient *docker.Client) http.Handler {
 	// API v1 routes
 	r.Route("/api/v1", func(r chi.Router) {
 
-		// Public auth routes (no API key needed)
+		// Public auth routes (no API key or session needed)
 		r.Post("/auth/register", authHandler.Register)
 		r.Post("/auth/api-keys", authHandler.GenerateBootstrapKey)
+		r.Post("/auth/login", authHandler.Login)
+		r.Post("/auth/logout", authHandler.Logout)
 
-		// Protected routes (require API key)
+		// Protected routes (require API key OR session cookie)
 		r.Group(func(r chi.Router) {
 			r.Use(AuthMiddleware(db))
+
+			// Session info
+			r.Get("/auth/me", authHandler.GetMe)
+
+			// Password change
+			r.Post("/auth/change-password", authHandler.ChangePassword)
 
 			// API key management
 			r.Post("/auth/keys", authHandler.CreateAPIKey)
@@ -57,6 +65,7 @@ func NewRouter(db *database.DB, dockerClient *docker.Client) http.Handler {
 			r.Post("/jobs", jobHandler.Create)
 			r.Get("/jobs", jobHandler.List)
 			r.Get("/jobs/{jobID}", jobHandler.Get)
+			r.Patch("/jobs/{jobID}", jobHandler.Update)
 			r.Delete("/jobs/{jobID}", jobHandler.Delete)
 
 			// Job runs
@@ -83,11 +92,18 @@ func NewRouter(db *database.DB, dockerClient *docker.Client) http.Handler {
 }
 
 // corsMiddleware adds CORS headers for development.
+// Supports credentials (cookies) with specific origin instead of wildcard.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			origin = "http://localhost:3000"
+		}
+
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)

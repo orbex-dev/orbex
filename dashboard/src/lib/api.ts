@@ -43,29 +43,39 @@ export interface CreateJobRequest {
   schedule?: string;
 }
 
+export interface UpdateJobRequest {
+  name?: string;
+  image?: string;
+  command?: string[];
+  env?: Record<string, string>;
+  memory_mb?: number;
+  cpu_millicores?: number;
+  timeout_seconds?: number;
+  schedule?: string;
+  is_active?: boolean;
+}
+
+export interface TriggerRunRequest {
+  timeout_seconds?: number;
+  env?: Record<string, string>;
+  command?: string[];
+}
+
+export interface User {
+  id: string;
+  email: string;
+  created_at: string;
+  updated_at: string;
+}
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
-
-function getApiKey(): string {
-  if (typeof window !== 'undefined') {
-    return localStorage.getItem('orbex_api_key') || '';
-  }
-  return '';
-}
-
-export function setApiKey(key: string) {
-  localStorage.setItem('orbex_api_key', key);
-}
-
-export function getStoredApiKey(): string {
-  return getApiKey();
-}
 
 async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
+    credentials: 'include', // Send cookies with every request
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${getApiKey()}`,
       ...options.headers,
     },
   });
@@ -79,18 +89,45 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
   return res.json();
 }
 
+// Auth (session-based)
+export const auth = {
+  login: (email: string, password: string) =>
+    apiFetch<User>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
+  logout: () =>
+    apiFetch<{ status: string }>('/auth/logout', { method: 'POST' }),
+  getMe: () =>
+    apiFetch<User>('/auth/me'),
+  register: (email: string, password: string) =>
+    apiFetch<User>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    apiFetch<{ status: string }>('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    }),
+};
+
 // Jobs
 export const api = {
   listJobs: () => apiFetch<Job[]>('/jobs'),
   getJob: (id: string) => apiFetch<Job>(`/jobs/${id}`),
   createJob: (data: CreateJobRequest) =>
     apiFetch<Job>('/jobs', { method: 'POST', body: JSON.stringify(data) }),
+  updateJob: (id: string, data: UpdateJobRequest) =>
+    apiFetch<Job>(`/jobs/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteJob: (id: string) =>
     apiFetch<void>(`/jobs/${id}`, { method: 'DELETE' }),
 
   // Runs
   triggerRun: (jobId: string) =>
     apiFetch<JobRun>(`/jobs/${jobId}/run`, { method: 'POST' }),
+  triggerRunWithOverrides: (jobId: string, overrides: TriggerRunRequest) =>
+    apiFetch<JobRun>(`/jobs/${jobId}/run`, { method: 'POST', body: JSON.stringify(overrides) }),
   listRuns: (jobId: string) =>
     apiFetch<JobRun[]>(`/jobs/${jobId}/runs`),
   getRun: (runId: string) =>
@@ -108,15 +145,21 @@ export const api = {
   generateWebhook: (jobId: string) =>
     apiFetch<{ webhook_token: string; trigger_url: string }>(`/jobs/${jobId}/webhook`, { method: 'POST' }),
 
-  // Auth
-  register: (email: string, password: string) =>
-    apiFetch<{ id: string }>('/auth/register', {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
-    }),
+  // API Keys (for settings page — still needed for programmatic access)
   generateApiKey: (email: string, password: string) =>
     apiFetch<{ key: string }>('/auth/api-keys', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
 };
+
+// Client-side search helper
+export function searchJobs(jobs: Job[], query: string): Job[] {
+  if (!query.trim()) return jobs;
+  const q = query.toLowerCase();
+  return jobs.filter(j =>
+    j.name.toLowerCase().includes(q) ||
+    j.image.toLowerCase().includes(q) ||
+    j.id.includes(q)
+  );
+}
