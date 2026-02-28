@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -115,6 +117,8 @@ type queuedJob struct {
 	MemoryMB       int
 	CPUMillicores  int
 	TimeoutSeconds int
+	Script         *string
+	ScriptLang     *string
 }
 
 // pollAndExecute claims one job from the queue using SKIP LOCKED and executes it.
@@ -128,7 +132,8 @@ func (w *Worker) pollAndExecute(ctx context.Context) {
 	err = tx.QueryRow(ctx, `
 		SELECT q.id, q.run_id, q.job_id,
 		       j.name, j.image, j.command, j.env,
-		       j.memory_mb, j.cpu_millicores, j.timeout_seconds
+		       j.memory_mb, j.cpu_millicores, j.timeout_seconds,
+		       j.script, j.script_lang
 		FROM job_queue q
 		JOIN jobs j ON j.id = q.job_id
 		WHERE q.picked_at IS NULL
@@ -140,6 +145,7 @@ func (w *Worker) pollAndExecute(ctx context.Context) {
 		&qj.QueueID, &qj.RunID, &qj.JobID,
 		&qj.JobName, &qj.Image, &qj.Command, &qj.EnvJSON,
 		&qj.MemoryMB, &qj.CPUMillicores, &qj.TimeoutSeconds,
+		&qj.Script, &qj.ScriptLang,
 	)
 	if err != nil {
 		tx.Rollback(ctx)
@@ -170,6 +176,8 @@ func (w *Worker) pollAndExecute(ctx context.Context) {
 		MemoryMB:       qj.MemoryMB,
 		CPUMillicores:  qj.CPUMillicores,
 		TimeoutSeconds: qj.TimeoutSeconds,
+		Script:         qj.Script,
+		ScriptLang:     qj.ScriptLang,
 	}
 
 	// Execute in background
@@ -215,13 +223,36 @@ func (w *Worker) executeRun(job models.Job, runID, queueID uuid.UUID) {
 
 	// Create container
 	containerName := fmt.Sprintf("orbex-%s-%s", job.Name, runID.String()[:8])
+
+	// Handle inline script mounting
+	var binds []string
+	command := job.Command
+	var scriptCleanup func()
+	if job.Script != nil && *job.Script != "" && job.ScriptLang != nil {
+		ext := scriptExtension(*job.ScriptLang)
+		scriptDir := filepath.Join(os.TempDir(), "orbex-scripts")
+		os.MkdirAll(scriptDir, 0755)
+		scriptPath := filepath.Join(scriptDir, runID.String()+ext)
+		if err := os.WriteFile(scriptPath, []byte(*job.Script), 0644); err != nil {
+			w.failRun(ctx, runID, startedAt, fmt.Sprintf("failed to write script: %v", err))
+			w.cleanupQueue(ctx, queueID)
+			return
+		}
+		containerScriptPath := "/orbex/script" + ext
+		binds = []string{scriptPath + ":" + containerScriptPath + ":ro"}
+		command = scriptCommand(*job.ScriptLang, containerScriptPath)
+		scriptCleanup = func() { os.Remove(scriptPath) }
+		log.Printf("[worker] Mounting inline script (%s) for run %s", *job.ScriptLang, runID)
+	}
+
 	containerID, err := w.docker.CreateContainer(ctx, docker.ContainerConfig{
 		Name:          containerName,
 		Image:         job.Image,
-		Command:       job.Command,
+		Command:       command,
 		Env:           job.Env,
 		MemoryMB:      job.MemoryMB,
 		CPUMillicores: job.CPUMillicores,
+		Binds:         binds,
 	})
 	if err != nil {
 		w.failRun(ctx, runID, startedAt, fmt.Sprintf("container create failed: %v", err))
@@ -349,6 +380,9 @@ func (w *Worker) executeRun(job models.Job, runID, queueID uuid.UUID) {
 	// Cleanup
 	w.cleanupQueue(ctx, queueID)
 	_ = w.docker.RemoveContainer(ctx, containerID)
+	if scriptCleanup != nil {
+		scriptCleanup()
+	}
 
 	// Send notification if configured
 	var errMsg string
@@ -383,4 +417,40 @@ func (w *Worker) failRun(ctx context.Context, runID uuid.UUID, startedAt time.Ti
 // cleanupQueue removes the queue item for a completed run.
 func (w *Worker) cleanupQueue(ctx context.Context, queueID uuid.UUID) {
 	_, _ = w.db.Pool.Exec(ctx, `DELETE FROM job_queue WHERE id = $1`, queueID)
+}
+
+// scriptExtension returns the file extension for a script language.
+func scriptExtension(lang string) string {
+	switch lang {
+	case "python":
+		return ".py"
+	case "node":
+		return ".js"
+	case "bash":
+		return ".sh"
+	case "go":
+		return ".go"
+	case "ruby":
+		return ".rb"
+	default:
+		return ".sh"
+	}
+}
+
+// scriptCommand returns the command to run a script for a given language.
+func scriptCommand(lang, scriptPath string) []string {
+	switch lang {
+	case "python":
+		return []string{"python", scriptPath}
+	case "node":
+		return []string{"node", scriptPath}
+	case "bash":
+		return []string{"bash", scriptPath}
+	case "go":
+		return []string{"go", "run", scriptPath}
+	case "ruby":
+		return []string{"ruby", scriptPath}
+	default:
+		return []string{"bash", scriptPath}
+	}
 }

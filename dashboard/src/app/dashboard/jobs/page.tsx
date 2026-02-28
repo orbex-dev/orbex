@@ -31,6 +31,9 @@ const schedulePresets = [
 function CreateJobWizard({ onCreated, onClose }: { onCreated: () => void; onClose: () => void }) {
     const [step, setStep] = useState(1);
     const [creating, setCreating] = useState(false);
+    const [jobMode, setJobMode] = useState<'docker' | 'script'>('docker');
+    const [scriptLang, setScriptLang] = useState('python');
+    const [scriptContent, setScriptContent] = useState('');
     const [form, setForm] = useState({
         name: '', image: 'alpine:latest', command: '',
         memory_mb: 512, cpu_millicores: 1000, timeout_seconds: 3600,
@@ -43,15 +46,21 @@ function CreateJobWizard({ onCreated, onClose }: { onCreated: () => void; onClos
         try {
             const env: Record<string, string> = {};
             envPairs.forEach(p => { if (p.key) env[p.key] = p.value; });
+            const runtimeImages: Record<string, string> = {
+                python: 'python:3.12-slim', node: 'node:22-slim', bash: 'alpine:latest',
+                go: 'golang:1.22-alpine', ruby: 'ruby:3.3-slim',
+            };
             await api.createJob({
                 name: form.name,
-                image: form.image,
-                command: form.command ? form.command.split(' ') : undefined,
+                image: jobMode === 'script' ? runtimeImages[scriptLang] || 'alpine:latest' : form.image,
+                command: jobMode === 'docker' && form.command ? form.command.split(' ') : undefined,
                 env: Object.keys(env).length > 0 ? env : undefined,
                 memory_mb: form.memory_mb,
                 cpu_millicores: form.cpu_millicores,
                 timeout_seconds: form.timeout_seconds,
                 schedule: (form.schedule === '' && form.customSchedule) ? form.customSchedule : form.schedule || undefined,
+                script: jobMode === 'script' && scriptContent ? scriptContent : undefined,
+                script_lang: jobMode === 'script' ? scriptLang : undefined,
             });
             onCreated();
             onClose();
@@ -97,48 +106,126 @@ function CreateJobWizard({ onCreated, onClose }: { onCreated: () => void; onClos
                     </div>
                 )}
 
-                {/* Step 2: Image */}
+                {/* Step 2: Image / Script Mode */}
                 {step === 2 && (
                     <div>
-                        <label className="block text-sm font-medium text-zinc-300 mb-2">Docker Image</label>
-                        <div className="grid grid-cols-3 gap-2 mb-3">
-                            {popularImages.map(img => (
-                                <button
-                                    key={img.image}
-                                    onClick={() => setForm({ ...form, image: img.image })}
-                                    className={`p-3 rounded-lg text-left transition-all ${form.image === img.image
-                                        ? 'bg-blue-500/10 border border-blue-500/30'
-                                        : 'border hover:border-zinc-600'
-                                        }`}
-                                    style={{ borderColor: form.image === img.image ? undefined : 'var(--border)' }}
-                                >
-                                    <span className="text-xs font-semibold text-zinc-200 block">{img.name}</span>
-                                    <span className="text-[10px] text-zinc-500 font-mono">{img.image}</span>
-                                </button>
-                            ))}
+                        {/* Mode toggle */}
+                        <div className="flex gap-2 mb-4">
+                            <button
+                                onClick={() => setJobMode('docker')}
+                                className={`flex-1 p-3 rounded-lg text-sm font-medium text-center transition-all ${jobMode === 'docker'
+                                    ? 'bg-blue-500/10 border border-blue-500/30 text-blue-400'
+                                    : 'text-zinc-400 border hover:border-zinc-600'
+                                    }`}
+                                style={{ borderColor: jobMode === 'docker' ? undefined : 'var(--border)' }}
+                            >
+                                📦 Docker Image
+                                <p className="text-[10px] text-zinc-500 mt-0.5 font-normal">Bring your own image</p>
+                            </button>
+                            <button
+                                onClick={() => setJobMode('script')}
+                                className={`flex-1 p-3 rounded-lg text-sm font-medium text-center transition-all ${jobMode === 'script'
+                                    ? 'bg-violet-500/10 border border-violet-500/30 text-violet-400'
+                                    : 'text-zinc-400 border hover:border-zinc-600'
+                                    }`}
+                                style={{ borderColor: jobMode === 'script' ? undefined : 'var(--border)' }}
+                            >
+                                ✏️ Write Script
+                                <p className="text-[10px] text-zinc-500 mt-0.5 font-normal">No Docker required</p>
+                            </button>
                         </div>
-                        <input
-                            className="input input-mono" placeholder="or type custom image..."
-                            value={form.image} onChange={e => setForm({ ...form, image: e.target.value })}
-                        />
+
+                        {jobMode === 'docker' ? (
+                            <>
+                                <label className="block text-sm font-medium text-zinc-300 mb-2">Docker Image</label>
+                                <div className="grid grid-cols-3 gap-2 mb-3">
+                                    {popularImages.map(img => (
+                                        <button
+                                            key={img.image}
+                                            onClick={() => setForm({ ...form, image: img.image })}
+                                            className={`p-3 rounded-lg text-left transition-all ${form.image === img.image
+                                                ? 'bg-blue-500/10 border border-blue-500/30'
+                                                : 'border hover:border-zinc-600'
+                                                }`}
+                                            style={{ borderColor: form.image === img.image ? undefined : 'var(--border)' }}
+                                        >
+                                            <span className="text-xs font-semibold text-zinc-200 block">{img.name}</span>
+                                            <span className="text-[10px] text-zinc-500 font-mono">{img.image}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                                <input
+                                    className="input input-mono" placeholder="or type custom image..."
+                                    value={form.image} onChange={e => setForm({ ...form, image: e.target.value })}
+                                />
+                            </>
+                        ) : (
+                            <>
+                                <label className="block text-sm font-medium text-zinc-300 mb-2">Runtime</label>
+                                <div className="grid grid-cols-3 gap-2">
+                                    {[
+                                        { lang: 'python', label: 'Python', desc: '3.12' },
+                                        { lang: 'node', label: 'Node.js', desc: '22 LTS' },
+                                        { lang: 'bash', label: 'Bash', desc: 'Alpine' },
+                                        { lang: 'go', label: 'Go', desc: '1.22' },
+                                        { lang: 'ruby', label: 'Ruby', desc: '3.3' },
+                                    ].map(rt => (
+                                        <button
+                                            key={rt.lang}
+                                            onClick={() => setScriptLang(rt.lang)}
+                                            className={`p-3 rounded-lg text-left transition-all ${scriptLang === rt.lang
+                                                ? 'bg-violet-500/10 border border-violet-500/30'
+                                                : 'border hover:border-zinc-600'
+                                                }`}
+                                            style={{ borderColor: scriptLang === rt.lang ? undefined : 'var(--border)' }}
+                                        >
+                                            <span className="text-xs font-semibold text-zinc-200 block">{rt.label}</span>
+                                            <span className="text-[10px] text-zinc-500">{rt.desc}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </>
+                        )}
                     </div>
                 )}
 
-                {/* Step 3: Command */}
+                {/* Step 3: Command / Script */}
                 {step === 3 && (
                     <div>
-                        <label className="block text-sm font-medium text-zinc-300 mb-2">Container Command <span className="text-zinc-500 font-normal">(optional)</span></label>
-                        <input
-                            className="input input-mono" placeholder="python run.py --verbose"
-                            value={form.command} onChange={e => setForm({ ...form, command: e.target.value })}
-                            autoFocus
-                        />
-                        <p className="text-xs text-zinc-500 mt-2">What should the container execute when it starts? This overrides the Docker image&apos;s built-in CMD. Leave empty to use the image&apos;s default entrypoint.</p>
-                        {form.image.includes('python') && (
-                            <p className="text-xs text-blue-400/60 mt-1">💡 Try: <code className="text-blue-400">python -c &quot;print(&apos;hello&apos;)&quot;</code></p>
-                        )}
-                        {form.image.includes('node') && (
-                            <p className="text-xs text-blue-400/60 mt-1">💡 Try: <code className="text-blue-400">node -e &quot;console.log(&apos;hello&apos;)&quot;</code></p>
+                        {jobMode === 'script' ? (
+                            <>
+                                <label className="block text-sm font-medium text-zinc-300 mb-2">Script Code</label>
+                                <textarea
+                                    className="input input-mono text-sm leading-relaxed"
+                                    rows={12}
+                                    placeholder={scriptLang === 'python' ? 'print("Hello from Orbex!")' :
+                                        scriptLang === 'node' ? 'console.log("Hello from Orbex!");' :
+                                            scriptLang === 'bash' ? 'echo "Hello from Orbex!"' :
+                                                scriptLang === 'go' ? 'package main\n\nimport "fmt"\n\nfunc main() {\n    fmt.Println("Hello from Orbex!")\n}' :
+                                                    '# Your code here'}
+                                    value={scriptContent}
+                                    onChange={e => setScriptContent(e.target.value)}
+                                    autoFocus
+                                    style={{ tabSize: 2, resize: 'vertical', minHeight: '200px' }}
+                                />
+                                <p className="text-xs text-zinc-500 mt-2">Write your {scriptLang} code above. It will be mounted into a container and executed at runtime.</p>
+                            </>
+                        ) : (
+                            <>
+                                <label className="block text-sm font-medium text-zinc-300 mb-2">Container Command <span className="text-zinc-500 font-normal">(optional)</span></label>
+                                <input
+                                    className="input input-mono" placeholder="python run.py --verbose"
+                                    value={form.command} onChange={e => setForm({ ...form, command: e.target.value })}
+                                    autoFocus
+                                />
+                                <p className="text-xs text-zinc-500 mt-2">What should the container execute when it starts? This overrides the Docker image&apos;s built-in CMD. Leave empty to use the image&apos;s default entrypoint.</p>
+                                {form.image.includes('python') && (
+                                    <p className="text-xs text-blue-400/60 mt-1">💡 Try: <code className="text-blue-400">python -c &quot;print(&apos;hello&apos;)&quot;</code></p>
+                                )}
+                                {form.image.includes('node') && (
+                                    <p className="text-xs text-blue-400/60 mt-1">💡 Try: <code className="text-blue-400">node -e &quot;console.log(&apos;hello&apos;)&quot;</code></p>
+                                )}
+                            </>
                         )}
                     </div>
                 )}
@@ -265,8 +352,14 @@ function CreateJobWizard({ onCreated, onClose }: { onCreated: () => void; onClos
                         <div className="space-y-2 text-sm">
                             {[
                                 ['Name', form.name],
-                                ['Image', form.image],
-                                ['Entry Command', form.command || '(image default)'],
+                                ['Mode', jobMode === 'script' ? `Inline Script (${scriptLang})` : 'Docker Image'],
+                                ...(jobMode === 'docker' ? [
+                                    ['Image', form.image],
+                                    ['Entry Command', form.command || '(image default)'],
+                                ] : [
+                                    ['Runtime', scriptLang],
+                                    ['Script', scriptContent ? `${scriptContent.split('\n').length} lines` : '(empty)'],
+                                ]),
                                 ['Env Vars', envPairs.filter(p => p.key).length > 0 ? envPairs.filter(p => p.key).map(p => `${p.key}=${p.value}`).join(', ') : '(none)'],
                                 ['Memory', `${form.memory_mb}MB`],
                                 ['CPU', `${(form.cpu_millicores / 1000).toFixed(1)} cores`],

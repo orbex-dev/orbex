@@ -10,6 +10,8 @@ export interface Job {
   timeout_seconds: number;
   schedule?: string;
   webhook_token?: string;
+  script?: string;
+  script_lang?: string;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -41,6 +43,8 @@ export interface CreateJobRequest {
   cpu_millicores?: number;
   timeout_seconds?: number;
   schedule?: string;
+  script?: string;
+  script_lang?: string;
 }
 
 export interface UpdateJobRequest {
@@ -53,6 +57,8 @@ export interface UpdateJobRequest {
   timeout_seconds?: number;
   schedule?: string;
   is_active?: boolean;
+  script?: string;
+  script_lang?: string;
 }
 
 export interface TriggerRunRequest {

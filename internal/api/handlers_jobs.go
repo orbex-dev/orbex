@@ -59,15 +59,16 @@ func (h *JobHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	var job models.Job
 	err := h.db.Pool.QueryRow(r.Context(), `
-		INSERT INTO jobs (user_id, name, image, command, env, memory_mb, cpu_millicores, timeout_seconds, schedule)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		RETURNING id, user_id, name, image, command, env, memory_mb, cpu_millicores, timeout_seconds, schedule, is_active, created_at, updated_at
+		INSERT INTO jobs (user_id, name, image, command, env, memory_mb, cpu_millicores, timeout_seconds, schedule, script, script_lang)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		RETURNING id, user_id, name, image, command, env, memory_mb, cpu_millicores, timeout_seconds, schedule, script, script_lang, is_active, created_at, updated_at
 	`, user.ID, req.Name, req.Image, req.Command, envJSON,
 		req.MemoryMB, req.CPUMillicores, req.TimeoutSeconds, req.Schedule,
+		req.Script, req.ScriptLang,
 	).Scan(
 		&job.ID, &job.UserID, &job.Name, &job.Image, &job.Command,
 		&envJSON, &job.MemoryMB, &job.CPUMillicores, &job.TimeoutSeconds,
-		&job.Schedule, &job.IsActive, &job.CreatedAt, &job.UpdatedAt,
+		&job.Schedule, &job.Script, &job.ScriptLang, &job.IsActive, &job.CreatedAt, &job.UpdatedAt,
 	)
 
 	if err != nil {
@@ -93,7 +94,7 @@ func (h *JobHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := h.db.Pool.Query(r.Context(), `
 		SELECT id, user_id, name, image, command, env, memory_mb, cpu_millicores,
-		       timeout_seconds, schedule, is_active, created_at, updated_at
+		       timeout_seconds, schedule, script, script_lang, is_active, created_at, updated_at
 		FROM jobs
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -113,7 +114,7 @@ func (h *JobHandler) List(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(
 			&job.ID, &job.UserID, &job.Name, &job.Image, &job.Command,
 			&envJSON, &job.MemoryMB, &job.CPUMillicores, &job.TimeoutSeconds,
-			&job.Schedule, &job.IsActive, &job.CreatedAt, &job.UpdatedAt,
+			&job.Schedule, &job.Script, &job.ScriptLang, &job.IsActive, &job.CreatedAt, &job.UpdatedAt,
 		); err != nil {
 			continue
 		}
@@ -142,13 +143,13 @@ func (h *JobHandler) Get(w http.ResponseWriter, r *http.Request) {
 	var envJSON []byte
 	err = h.db.Pool.QueryRow(r.Context(), `
 		SELECT id, user_id, name, image, command, env, memory_mb, cpu_millicores,
-		       timeout_seconds, schedule, is_active, created_at, updated_at
+		       timeout_seconds, schedule, script, script_lang, is_active, created_at, updated_at
 		FROM jobs
 		WHERE id = $1 AND user_id = $2
 	`, jobID, user.ID).Scan(
 		&job.ID, &job.UserID, &job.Name, &job.Image, &job.Command,
 		&envJSON, &job.MemoryMB, &job.CPUMillicores, &job.TimeoutSeconds,
-		&job.Schedule, &job.IsActive, &job.CreatedAt, &job.UpdatedAt,
+		&job.Schedule, &job.Script, &job.ScriptLang, &job.IsActive, &job.CreatedAt, &job.UpdatedAt,
 	)
 
 	if err != nil {
@@ -185,6 +186,144 @@ func (h *JobHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Update partially updates an existing job's configuration.
+func (h *JobHandler) Update(w http.ResponseWriter, r *http.Request) {
+	user := UserFromContext(r.Context())
+	jobID, err := uuid.Parse(chi.URLParam(r, "jobID"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, models.ErrorResponse{
+			Error: "invalid_request", Message: "Invalid job ID",
+		})
+		return
+	}
+
+	var req models.UpdateJobRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, models.ErrorResponse{
+			Error: "invalid_request", Message: "Invalid JSON body",
+		})
+		return
+	}
+
+	// Build dynamic SET clause — only update provided fields
+	setClauses := []string{"updated_at = now()"}
+	args := []interface{}{}
+	argIdx := 1
+
+	if req.Name != nil {
+		setClauses = append(setClauses, fmt.Sprintf("name = $%d", argIdx))
+		args = append(args, *req.Name)
+		argIdx++
+	}
+	if req.Image != nil {
+		setClauses = append(setClauses, fmt.Sprintf("image = $%d", argIdx))
+		args = append(args, *req.Image)
+		argIdx++
+	}
+	if req.Command != nil {
+		setClauses = append(setClauses, fmt.Sprintf("command = $%d", argIdx))
+		args = append(args, *req.Command)
+		argIdx++
+	}
+	if req.Env != nil {
+		envJSON, _ := json.Marshal(*req.Env)
+		setClauses = append(setClauses, fmt.Sprintf("env = $%d", argIdx))
+		args = append(args, envJSON)
+		argIdx++
+	}
+	if req.MemoryMB != nil {
+		setClauses = append(setClauses, fmt.Sprintf("memory_mb = $%d", argIdx))
+		args = append(args, *req.MemoryMB)
+		argIdx++
+	}
+	if req.CPUMillicores != nil {
+		setClauses = append(setClauses, fmt.Sprintf("cpu_millicores = $%d", argIdx))
+		args = append(args, *req.CPUMillicores)
+		argIdx++
+	}
+	if req.TimeoutSeconds != nil {
+		setClauses = append(setClauses, fmt.Sprintf("timeout_seconds = $%d", argIdx))
+		args = append(args, *req.TimeoutSeconds)
+		argIdx++
+	}
+	if req.Schedule != nil {
+		setClauses = append(setClauses, fmt.Sprintf("schedule = $%d", argIdx))
+		if *req.Schedule == "" {
+			args = append(args, nil) // clear schedule
+		} else {
+			args = append(args, *req.Schedule)
+		}
+		argIdx++
+	}
+	if req.IsActive != nil {
+		setClauses = append(setClauses, fmt.Sprintf("is_active = $%d", argIdx))
+		args = append(args, *req.IsActive)
+		argIdx++
+	}
+	if req.Script != nil {
+		setClauses = append(setClauses, fmt.Sprintf("script = $%d", argIdx))
+		if *req.Script == "" {
+			args = append(args, nil) // clear script
+		} else {
+			args = append(args, *req.Script)
+		}
+		argIdx++
+	}
+	if req.ScriptLang != nil {
+		setClauses = append(setClauses, fmt.Sprintf("script_lang = $%d", argIdx))
+		if *req.ScriptLang == "" {
+			args = append(args, nil) // clear script_lang
+		} else {
+			args = append(args, *req.ScriptLang)
+		}
+		argIdx++
+	}
+
+	if len(args) == 0 {
+		writeJSON(w, http.StatusBadRequest, models.ErrorResponse{
+			Error: "invalid_request", Message: "No fields to update",
+		})
+		return
+	}
+
+	// Add WHERE params
+	args = append(args, jobID, user.ID)
+	query := fmt.Sprintf(`
+		UPDATE jobs SET %s
+		WHERE id = $%d AND user_id = $%d
+		RETURNING id, user_id, name, image, command, env, memory_mb, cpu_millicores, timeout_seconds, schedule, script, script_lang, is_active, created_at, updated_at
+	`, joinStrings(setClauses, ", "), argIdx, argIdx+1)
+
+	var job models.Job
+	var envJSON []byte
+	err = h.db.Pool.QueryRow(r.Context(), query, args...).Scan(
+		&job.ID, &job.UserID, &job.Name, &job.Image, &job.Command,
+		&envJSON, &job.MemoryMB, &job.CPUMillicores, &job.TimeoutSeconds,
+		&job.Schedule, &job.Script, &job.ScriptLang, &job.IsActive, &job.CreatedAt, &job.UpdatedAt,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, models.ErrorResponse{
+			Error: "not_found", Message: "Job not found",
+		})
+		return
+	}
+
+	_ = json.Unmarshal(envJSON, &job.Env)
+	writeJSON(w, http.StatusOK, job)
+}
+
+// joinStrings joins string slices (avoiding strings import for one use).
+func joinStrings(parts []string, sep string) string {
+	result := ""
+	for i, p := range parts {
+		if i > 0 {
+			result += sep
+		}
+		result += p
+	}
+	return result
 }
 
 // GenerateWebhookToken creates or regenerates a webhook token for a job.

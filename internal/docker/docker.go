@@ -19,6 +19,7 @@ type ContainerConfig struct {
 	MemoryMB      int
 	CPUMillicores int // 1000 = 1 core
 	Name          string
+	Binds         []string // Host:Container bind mounts
 }
 
 // Client wraps the Docker Engine API client.
@@ -90,6 +91,7 @@ func (c *Client) CreateContainer(ctx context.Context, cfg ContainerConfig) (stri
 			NanoCPUs: int64(cfg.CPUMillicores) * 1_000_000, // millicores to nanocpus
 		},
 		SecurityOpt: []string{"no-new-privileges"},
+		Binds:       cfg.Binds,
 	}
 
 	result, err := c.cli.ContainerCreate(ctx, client.ContainerCreateOptions{

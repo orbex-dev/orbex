@@ -51,6 +51,8 @@ type Job struct {
 	TimeoutSeconds int               `json:"timeout_seconds"`
 	Schedule       *string           `json:"schedule,omitempty"`
 	WebhookToken   *string           `json:"webhook_token,omitempty"`
+	Script         *string           `json:"script,omitempty"`
+	ScriptLang     *string           `json:"script_lang,omitempty"`
 	IsActive       bool              `json:"is_active"`
 	CreatedAt      time.Time         `json:"created_at"`
 	UpdatedAt      time.Time         `json:"updated_at"`
@@ -97,6 +99,31 @@ type CreateJobRequest struct {
 	CPUMillicores  int               `json:"cpu_millicores,omitempty"`
 	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
 	Schedule       *string           `json:"schedule,omitempty"`
+	Script         *string           `json:"script,omitempty"`
+	ScriptLang     *string           `json:"script_lang,omitempty"`
+}
+
+// UpdateJobRequest is the payload for partially updating a job (PATCH).
+// Only non-nil fields are updated.
+type UpdateJobRequest struct {
+	Name           *string            `json:"name,omitempty"`
+	Image          *string            `json:"image,omitempty"`
+	Command        *[]string          `json:"command,omitempty"`
+	Env            *map[string]string `json:"env,omitempty"`
+	MemoryMB       *int               `json:"memory_mb,omitempty"`
+	CPUMillicores  *int               `json:"cpu_millicores,omitempty"`
+	TimeoutSeconds *int               `json:"timeout_seconds,omitempty"`
+	Schedule       *string            `json:"schedule,omitempty"`
+	IsActive       *bool              `json:"is_active,omitempty"`
+	Script         *string            `json:"script,omitempty"`
+	ScriptLang     *string            `json:"script_lang,omitempty"`
+}
+
+// TriggerRunRequest is the optional payload for triggering a run with overrides.
+type TriggerRunRequest struct {
+	TimeoutSeconds *int              `json:"timeout_seconds,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
+	Command        *[]string         `json:"command,omitempty"`
 }
 
 // RegisterRequest is the payload for user registration.
