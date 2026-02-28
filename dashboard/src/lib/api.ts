@@ -1,3 +1,5 @@
+export type SourceType = 'image' | 'script' | 'upload' | 'dockerfile' | 'github' | 'compose';
+
 export interface Job {
   id: string;
   user_id: string;
@@ -12,6 +14,11 @@ export interface Job {
   webhook_token?: string;
   script?: string;
   script_lang?: string;
+  source_type: SourceType;
+  github_repo?: string;
+  github_branch?: string;
+  dockerfile_path?: string;
+  source_config?: Record<string, unknown>;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -36,7 +43,7 @@ export interface JobRun {
 
 export interface CreateJobRequest {
   name: string;
-  image: string;
+  image?: string;
   command?: string[];
   env?: Record<string, string>;
   memory_mb?: number;
@@ -45,6 +52,12 @@ export interface CreateJobRequest {
   schedule?: string;
   script?: string;
   script_lang?: string;
+  source_type?: SourceType;
+  github_repo?: string;
+  github_branch?: string;
+  github_token_id?: string;
+  dockerfile_path?: string;
+  source_config?: Record<string, unknown>;
 }
 
 export interface UpdateJobRequest {
@@ -59,6 +72,11 @@ export interface UpdateJobRequest {
   is_active?: boolean;
   script?: string;
   script_lang?: string;
+  source_type?: SourceType;
+  github_repo?: string;
+  github_branch?: string;
+  dockerfile_path?: string;
+  source_config?: Record<string, unknown>;
 }
 
 export interface TriggerRunRequest {
@@ -157,6 +175,35 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
+};
+
+// GitHub integration
+export const github = {
+  getStatus: () =>
+    apiFetch<{ connected: boolean; github_username?: string; connected_at?: string }>('/github/status'),
+  listRepos: () =>
+    apiFetch<Array<{ full_name: string; name: string; owner: string; default_branch: string; private: boolean; description: string; html_url: string }>>('/github/repos'),
+  listBranches: (owner: string, repo: string) =>
+    apiFetch<string[]>(`/github/repos/${owner}/${repo}/branches`),
+};
+
+// File uploads
+export const uploads = {
+  upload: async (jobId: string, files: FileList | File[]) => {
+    const formData = new FormData();
+    Array.from(files).forEach(f => formData.append('files', f));
+    const res = await fetch(`${API_BASE}/jobs/${jobId}/upload`, {
+      method: 'POST',
+      credentials: 'include',
+      body: formData,
+    });
+    if (!res.ok) throw new Error('Upload failed');
+    return res.json();
+  },
+  listFiles: (jobId: string) =>
+    apiFetch<Array<{ filename: string; size: number; last_modified: string }>>(`/jobs/${jobId}/files`),
+  deleteFile: (jobId: string, filename: string) =>
+    apiFetch<void>(`/jobs/${jobId}/files/${filename}`, { method: 'DELETE' }),
 };
 
 // Client-side search helper

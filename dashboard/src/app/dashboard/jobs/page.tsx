@@ -31,15 +31,35 @@ const schedulePresets = [
 function CreateJobWizard({ onCreated, onClose }: { onCreated: () => void; onClose: () => void }) {
     const [step, setStep] = useState(1);
     const [creating, setCreating] = useState(false);
-    const [jobMode, setJobMode] = useState<'docker' | 'script'>('docker');
+    type SourceType = 'image' | 'script' | 'upload' | 'dockerfile' | 'github' | 'compose';
+    const [sourceType, setSourceType] = useState<SourceType>('image');
     const [scriptLang, setScriptLang] = useState('python');
     const [scriptContent, setScriptContent] = useState('');
+    const [githubRepo, setGithubRepo] = useState('');
+    const [githubBranch, setGithubBranch] = useState('main');
+    const [dockerfilePath, setDockerfilePath] = useState('./Dockerfile');
     const [form, setForm] = useState({
         name: '', image: 'alpine:latest', command: '',
         memory_mb: 512, cpu_millicores: 1000, timeout_seconds: 3600,
         schedule: '', customSchedule: '',
     });
     const [envPairs, setEnvPairs] = useState<Array<{ key: string; value: string }>>([]);
+
+    // Dynamic steps based on source type
+    const getSteps = () => {
+        const base = ['Name', 'Source'];
+        switch (sourceType) {
+            case 'image': return [...base, 'Image', 'Command', 'Env', 'Resources', 'Schedule', 'Review'];
+            case 'script': return [...base, 'Runtime', 'Script', 'Env', 'Resources', 'Schedule', 'Review'];
+            case 'upload': return [...base, 'Image', 'Env', 'Resources', 'Schedule', 'Review'];
+            case 'dockerfile': return [...base, 'Dockerfile', 'Env', 'Resources', 'Schedule', 'Review'];
+            case 'github': return [...base, 'Repository', 'Dockerfile', 'Env', 'Resources', 'Schedule', 'Review'];
+            case 'compose': return [...base, 'Env', 'Resources', 'Schedule', 'Review'];
+        }
+    };
+    const stepTitles = getSteps();
+    const totalSteps = stepTitles.length;
+    const currentStepName = stepTitles[step - 1];
 
     async function handleCreate() {
         setCreating(true);
@@ -50,18 +70,44 @@ function CreateJobWizard({ onCreated, onClose }: { onCreated: () => void; onClos
                 python: 'python:3.12-slim', node: 'node:22-slim', bash: 'alpine:latest',
                 go: 'golang:1.22-alpine', ruby: 'ruby:3.3-slim',
             };
-            await api.createJob({
+
+            const payload: Record<string, unknown> = {
                 name: form.name,
-                image: jobMode === 'script' ? runtimeImages[scriptLang] || 'alpine:latest' : form.image,
-                command: jobMode === 'docker' && form.command ? form.command.split(' ') : undefined,
+                source_type: sourceType,
                 env: Object.keys(env).length > 0 ? env : undefined,
                 memory_mb: form.memory_mb,
                 cpu_millicores: form.cpu_millicores,
                 timeout_seconds: form.timeout_seconds,
                 schedule: (form.schedule === '' && form.customSchedule) ? form.customSchedule : form.schedule || undefined,
-                script: jobMode === 'script' && scriptContent ? scriptContent : undefined,
-                script_lang: jobMode === 'script' ? scriptLang : undefined,
-            });
+            };
+
+            switch (sourceType) {
+                case 'image':
+                    payload.image = form.image;
+                    payload.command = form.command ? form.command.split(' ') : undefined;
+                    break;
+                case 'script':
+                    payload.image = runtimeImages[scriptLang] || 'alpine:latest';
+                    payload.script = scriptContent || undefined;
+                    payload.script_lang = scriptLang;
+                    break;
+                case 'upload':
+                    payload.image = form.image;
+                    break;
+                case 'dockerfile':
+                    payload.dockerfile_path = dockerfilePath;
+                    break;
+                case 'github':
+                    payload.github_repo = githubRepo;
+                    payload.github_branch = githubBranch;
+                    payload.dockerfile_path = dockerfilePath;
+                    break;
+                case 'compose':
+                    // Image will be derived from compose file
+                    break;
+            }
+
+            await api.createJob(payload as any);
             onCreated();
             onClose();
         } catch (err) {
@@ -71,13 +117,20 @@ function CreateJobWizard({ onCreated, onClose }: { onCreated: () => void; onClos
         }
     }
 
-    const stepTitles = ['Name', 'Image', 'Entry Command', 'Env Vars', 'Resources', 'Schedule', 'Review'];
+    const sourceTypes = [
+        { id: 'image' as SourceType, icon: '📦', label: 'Docker Image', desc: 'Bring your own image', color: 'blue' },
+        { id: 'script' as SourceType, icon: '✏️', label: 'Write Script', desc: 'No Docker required', color: 'violet' },
+        { id: 'upload' as SourceType, icon: '📁', label: 'Upload Files', desc: 'Upload & run', color: 'emerald' },
+        { id: 'dockerfile' as SourceType, icon: '🐳', label: 'Dockerfile', desc: 'Build from Dockerfile', color: 'cyan' },
+        { id: 'github' as SourceType, icon: '🔗', label: 'GitHub Repo', desc: 'Auto-build on push', color: 'orange' },
+        { id: 'compose' as SourceType, icon: '🧩', label: 'Compose', desc: 'Multi-container', color: 'pink' },
+    ];
 
     return (
         <Dialog onClose={onClose}>
             <div className="p-6">
                 {/* Progress */}
-                <div className="flex items-center gap-1 mb-5">
+                <div className="flex items-center gap-1 mb-5 flex-wrap">
                     {stepTitles.map((t, i) => (
                         <div key={i} className="flex items-center gap-1">
                             <button
@@ -93,7 +146,7 @@ function CreateJobWizard({ onCreated, onClose }: { onCreated: () => void; onClos
                 </div>
 
                 {/* Step 1: Name */}
-                {step === 1 && (
+                {currentStepName === 'Name' && (
                     <div>
                         <label className="block text-sm font-medium text-zinc-300 mb-2">Job Name</label>
                         <input
@@ -106,132 +159,164 @@ function CreateJobWizard({ onCreated, onClose }: { onCreated: () => void; onClos
                     </div>
                 )}
 
-                {/* Step 2: Image / Script Mode */}
-                {step === 2 && (
+                {/* Step 2: Source Type Selector */}
+                {currentStepName === 'Source' && (
                     <div>
-                        {/* Mode toggle */}
-                        <div className="flex gap-2 mb-4">
-                            <button
-                                onClick={() => setJobMode('docker')}
-                                className={`flex-1 p-3 rounded-lg text-sm font-medium text-center transition-all ${jobMode === 'docker'
-                                    ? 'bg-blue-500/10 border border-blue-500/30 text-blue-400'
-                                    : 'text-zinc-400 border hover:border-zinc-600'
-                                    }`}
-                                style={{ borderColor: jobMode === 'docker' ? undefined : 'var(--border)' }}
-                            >
-                                📦 Docker Image
-                                <p className="text-[10px] text-zinc-500 mt-0.5 font-normal">Bring your own image</p>
-                            </button>
-                            <button
-                                onClick={() => setJobMode('script')}
-                                className={`flex-1 p-3 rounded-lg text-sm font-medium text-center transition-all ${jobMode === 'script'
-                                    ? 'bg-violet-500/10 border border-violet-500/30 text-violet-400'
-                                    : 'text-zinc-400 border hover:border-zinc-600'
-                                    }`}
-                                style={{ borderColor: jobMode === 'script' ? undefined : 'var(--border)' }}
-                            >
-                                ✏️ Write Script
-                                <p className="text-[10px] text-zinc-500 mt-0.5 font-normal">No Docker required</p>
-                            </button>
+                        <label className="block text-sm font-medium text-zinc-300 mb-3">How will you provide your code?</label>
+                        <div className="grid grid-cols-3 gap-2">
+                            {sourceTypes.map(st => (
+                                <button
+                                    key={st.id}
+                                    onClick={() => setSourceType(st.id)}
+                                    className={`p-3 rounded-lg text-left transition-all ${sourceType === st.id
+                                        ? `bg-${st.color}-500/10 border border-${st.color}-500/30`
+                                        : 'border hover:border-zinc-600'
+                                        }`}
+                                    style={{
+                                        borderColor: sourceType === st.id ? `var(--${st.color}, rgba(96,165,250,0.3))` : 'var(--border)',
+                                        background: sourceType === st.id ? `rgba(96,165,250,0.08)` : undefined,
+                                    }}
+                                >
+                                    <span className="text-lg block mb-1">{st.icon}</span>
+                                    <span className="text-xs font-semibold text-zinc-200 block">{st.label}</span>
+                                    <span className="text-[10px] text-zinc-500">{st.desc}</span>
+                                </button>
+                            ))}
                         </div>
-
-                        {jobMode === 'docker' ? (
-                            <>
-                                <label className="block text-sm font-medium text-zinc-300 mb-2">Docker Image</label>
-                                <div className="grid grid-cols-3 gap-2 mb-3">
-                                    {popularImages.map(img => (
-                                        <button
-                                            key={img.image}
-                                            onClick={() => setForm({ ...form, image: img.image })}
-                                            className={`p-3 rounded-lg text-left transition-all ${form.image === img.image
-                                                ? 'bg-blue-500/10 border border-blue-500/30'
-                                                : 'border hover:border-zinc-600'
-                                                }`}
-                                            style={{ borderColor: form.image === img.image ? undefined : 'var(--border)' }}
-                                        >
-                                            <span className="text-xs font-semibold text-zinc-200 block">{img.name}</span>
-                                            <span className="text-[10px] text-zinc-500 font-mono">{img.image}</span>
-                                        </button>
-                                    ))}
-                                </div>
-                                <input
-                                    className="input input-mono" placeholder="or type custom image..."
-                                    value={form.image} onChange={e => setForm({ ...form, image: e.target.value })}
-                                />
-                            </>
-                        ) : (
-                            <>
-                                <label className="block text-sm font-medium text-zinc-300 mb-2">Runtime</label>
-                                <div className="grid grid-cols-3 gap-2">
-                                    {[
-                                        { lang: 'python', label: 'Python', desc: '3.12' },
-                                        { lang: 'node', label: 'Node.js', desc: '22 LTS' },
-                                        { lang: 'bash', label: 'Bash', desc: 'Alpine' },
-                                        { lang: 'go', label: 'Go', desc: '1.22' },
-                                        { lang: 'ruby', label: 'Ruby', desc: '3.3' },
-                                    ].map(rt => (
-                                        <button
-                                            key={rt.lang}
-                                            onClick={() => setScriptLang(rt.lang)}
-                                            className={`p-3 rounded-lg text-left transition-all ${scriptLang === rt.lang
-                                                ? 'bg-violet-500/10 border border-violet-500/30'
-                                                : 'border hover:border-zinc-600'
-                                                }`}
-                                            style={{ borderColor: scriptLang === rt.lang ? undefined : 'var(--border)' }}
-                                        >
-                                            <span className="text-xs font-semibold text-zinc-200 block">{rt.label}</span>
-                                            <span className="text-[10px] text-zinc-500">{rt.desc}</span>
-                                        </button>
-                                    ))}
-                                </div>
-                            </>
-                        )}
                     </div>
                 )}
 
-                {/* Step 3: Command / Script */}
-                {step === 3 && (
+                {/* Image selection step */}
+                {currentStepName === 'Image' && (
                     <div>
-                        {jobMode === 'script' ? (
-                            <>
-                                <label className="block text-sm font-medium text-zinc-300 mb-2">Script Code</label>
-                                <textarea
-                                    className="input input-mono text-sm leading-relaxed"
-                                    rows={12}
-                                    placeholder={scriptLang === 'python' ? 'print("Hello from Orbex!")' :
-                                        scriptLang === 'node' ? 'console.log("Hello from Orbex!");' :
-                                            scriptLang === 'bash' ? 'echo "Hello from Orbex!"' :
-                                                scriptLang === 'go' ? 'package main\n\nimport "fmt"\n\nfunc main() {\n    fmt.Println("Hello from Orbex!")\n}' :
-                                                    '# Your code here'}
-                                    value={scriptContent}
-                                    onChange={e => setScriptContent(e.target.value)}
-                                    autoFocus
-                                    style={{ tabSize: 2, resize: 'vertical', minHeight: '200px' }}
-                                />
-                                <p className="text-xs text-zinc-500 mt-2">Write your {scriptLang} code above. It will be mounted into a container and executed at runtime.</p>
-                            </>
-                        ) : (
-                            <>
-                                <label className="block text-sm font-medium text-zinc-300 mb-2">Container Command <span className="text-zinc-500 font-normal">(optional)</span></label>
-                                <input
-                                    className="input input-mono" placeholder="python run.py --verbose"
-                                    value={form.command} onChange={e => setForm({ ...form, command: e.target.value })}
-                                    autoFocus
-                                />
-                                <p className="text-xs text-zinc-500 mt-2">What should the container execute when it starts? This overrides the Docker image&apos;s built-in CMD. Leave empty to use the image&apos;s default entrypoint.</p>
-                                {form.image.includes('python') && (
-                                    <p className="text-xs text-blue-400/60 mt-1">💡 Try: <code className="text-blue-400">python -c &quot;print(&apos;hello&apos;)&quot;</code></p>
-                                )}
-                                {form.image.includes('node') && (
-                                    <p className="text-xs text-blue-400/60 mt-1">💡 Try: <code className="text-blue-400">node -e &quot;console.log(&apos;hello&apos;)&quot;</code></p>
-                                )}
-                            </>
+                        <label className="block text-sm font-medium text-zinc-300 mb-2">Docker Image</label>
+                        <div className="grid grid-cols-3 gap-2 mb-3">
+                            {popularImages.map(img => (
+                                <button
+                                    key={img.image}
+                                    onClick={() => setForm({ ...form, image: img.image })}
+                                    className={`p-3 rounded-lg text-left transition-all ${form.image === img.image
+                                        ? 'bg-blue-500/10 border border-blue-500/30'
+                                        : 'border hover:border-zinc-600'
+                                        }`}
+                                    style={{ borderColor: form.image === img.image ? undefined : 'var(--border)' }}
+                                >
+                                    <span className="text-xs font-semibold text-zinc-200 block">{img.name}</span>
+                                    <span className="text-[10px] text-zinc-500 font-mono">{img.image}</span>
+                                </button>
+                            ))}
+                        </div>
+                        <input
+                            className="input input-mono" placeholder="or type custom image..."
+                            value={form.image} onChange={e => setForm({ ...form, image: e.target.value })}
+                        />
+                        {sourceType === 'upload' && (
+                            <p className="text-xs text-zinc-500 mt-2">Choose the runtime for your uploaded files. You can upload files after creating the job.</p>
                         )}
                     </div>
                 )}
 
-                {/* Step 4: Env Vars */}
-                {step === 4 && (
+                {/* Command step (image only) */}
+                {currentStepName === 'Command' && (
+                    <div>
+                        <label className="block text-sm font-medium text-zinc-300 mb-2">Container Command <span className="text-zinc-500 font-normal">(optional)</span></label>
+                        <input
+                            className="input input-mono" placeholder="python run.py --verbose"
+                            value={form.command} onChange={e => setForm({ ...form, command: e.target.value })}
+                            autoFocus
+                        />
+                        <p className="text-xs text-zinc-500 mt-2">What should the container execute when it starts? Leave empty to use the image&apos;s default.</p>
+                    </div>
+                )}
+
+                {/* Runtime selection (script only) */}
+                {currentStepName === 'Runtime' && (
+                    <div>
+                        <label className="block text-sm font-medium text-zinc-300 mb-2">Runtime</label>
+                        <div className="grid grid-cols-3 gap-2">
+                            {[
+                                { lang: 'python', label: 'Python', desc: '3.12' },
+                                { lang: 'node', label: 'Node.js', desc: '22 LTS' },
+                                { lang: 'bash', label: 'Bash', desc: 'Alpine' },
+                                { lang: 'go', label: 'Go', desc: '1.22' },
+                                { lang: 'ruby', label: 'Ruby', desc: '3.3' },
+                            ].map(rt => (
+                                <button
+                                    key={rt.lang}
+                                    onClick={() => setScriptLang(rt.lang)}
+                                    className={`p-3 rounded-lg text-left transition-all ${scriptLang === rt.lang
+                                        ? 'bg-violet-500/10 border border-violet-500/30'
+                                        : 'border hover:border-zinc-600'
+                                        }`}
+                                    style={{ borderColor: scriptLang === rt.lang ? undefined : 'var(--border)' }}
+                                >
+                                    <span className="text-xs font-semibold text-zinc-200 block">{rt.label}</span>
+                                    <span className="text-[10px] text-zinc-500">{rt.desc}</span>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {/* Script editor */}
+                {currentStepName === 'Script' && (
+                    <div>
+                        <label className="block text-sm font-medium text-zinc-300 mb-2">Script Code</label>
+                        <textarea
+                            className="input input-mono text-sm leading-relaxed"
+                            rows={12}
+                            placeholder={scriptLang === 'python' ? 'print("Hello from Orbex!")' :
+                                scriptLang === 'node' ? 'console.log("Hello from Orbex!");' :
+                                    'echo "Hello from Orbex!"'}
+                            value={scriptContent}
+                            onChange={e => setScriptContent(e.target.value)}
+                            autoFocus
+                            style={{ tabSize: 2, resize: 'vertical', minHeight: '200px' }}
+                        />
+                        <p className="text-xs text-zinc-500 mt-2">Write your {scriptLang} code above. It will be mounted into a container and executed at runtime.</p>
+                    </div>
+                )}
+
+                {/* Dockerfile path step */}
+                {currentStepName === 'Dockerfile' && (
+                    <div>
+                        <label className="block text-sm font-medium text-zinc-300 mb-2">Dockerfile Path</label>
+                        <input
+                            className="input input-mono" placeholder="./Dockerfile"
+                            value={dockerfilePath} onChange={e => setDockerfilePath(e.target.value)}
+                            autoFocus
+                        />
+                        <p className="text-xs text-zinc-500 mt-2">
+                            {sourceType === 'github'
+                                ? 'Path to the Dockerfile in your repository. Orbex will build this on every push.'
+                                : 'Path to the Dockerfile in your uploaded build context. Upload the Dockerfile after creating the job.'}
+                        </p>
+                    </div>
+                )}
+
+                {/* Repository step (GitHub only) */}
+                {currentStepName === 'Repository' && (
+                    <div>
+                        <label className="block text-sm font-medium text-zinc-300 mb-2">GitHub Repository</label>
+                        <input
+                            className="input input-mono" placeholder="owner/repo-name"
+                            value={githubRepo} onChange={e => setGithubRepo(e.target.value)}
+                            autoFocus
+                        />
+                        <label className="block text-sm font-medium text-zinc-300 mb-2 mt-4">Branch</label>
+                        <input
+                            className="input input-mono" placeholder="main"
+                            value={githubBranch} onChange={e => setGithubBranch(e.target.value)}
+                        />
+                        <p className="text-xs text-zinc-500 mt-2">
+                            Connect your GitHub account first from Settings, then enter the repository and branch to watch.
+                            Orbex will automatically build and run on every push.
+                        </p>
+                    </div>
+                )}
+
+                {/* Env Vars */}
+                {currentStepName === 'Env' && (
                     <div>
                         <div className="flex items-center justify-between mb-2">
                             <label className="block text-sm font-medium text-zinc-300">
@@ -278,8 +363,8 @@ function CreateJobWizard({ onCreated, onClose }: { onCreated: () => void; onClos
                     </div>
                 )}
 
-                {/* Step 5: Resources */}
-                {step === 5 && (
+                {/* Resources */}
+                {currentStepName === 'Resources' && (
                     <div className="space-y-4">
                         <div>
                             <label className="text-sm font-medium text-zinc-300 flex items-center justify-between">
@@ -317,8 +402,8 @@ function CreateJobWizard({ onCreated, onClose }: { onCreated: () => void; onClos
                     </div>
                 )}
 
-                {/* Step 6: Schedule */}
-                {step === 6 && (
+                {/* Schedule */}
+                {currentStepName === 'Schedule' && (
                     <div>
                         <label className="block text-sm font-medium text-zinc-300 mb-2">Schedule <span className="text-zinc-500 font-normal">(optional)</span></label>
                         <div className="grid grid-cols-3 gap-2 mb-3">
@@ -345,21 +430,32 @@ function CreateJobWizard({ onCreated, onClose }: { onCreated: () => void; onClos
                     </div>
                 )}
 
-                {/* Step 7: Review */}
-                {step === 7 && (
+                {/* Review */}
+                {currentStepName === 'Review' && (
                     <div>
                         <h3 className="text-sm font-semibold text-zinc-200 mb-3">Review Job</h3>
                         <div className="space-y-2 text-sm">
                             {[
                                 ['Name', form.name],
-                                ['Mode', jobMode === 'script' ? `Inline Script (${scriptLang})` : 'Docker Image'],
-                                ...(jobMode === 'docker' ? [
+                                ['Source', sourceTypes.find(s => s.id === sourceType)?.label || sourceType],
+                                ...(sourceType === 'image' ? [
                                     ['Image', form.image],
-                                    ['Entry Command', form.command || '(image default)'],
-                                ] : [
+                                    ['Command', form.command || '(image default)'],
+                                ] : sourceType === 'script' ? [
                                     ['Runtime', scriptLang],
                                     ['Script', scriptContent ? `${scriptContent.split('\n').length} lines` : '(empty)'],
-                                ]),
+                                ] : sourceType === 'upload' ? [
+                                    ['Image', form.image],
+                                    ['Files', 'Upload after creation'],
+                                ] : sourceType === 'dockerfile' ? [
+                                    ['Dockerfile', dockerfilePath],
+                                ] : sourceType === 'github' ? [
+                                    ['Repository', githubRepo || '(not set)'],
+                                    ['Branch', githubBranch],
+                                    ['Dockerfile', dockerfilePath],
+                                ] : sourceType === 'compose' ? [
+                                    ['Compose', 'Upload docker-compose.yml after creation'],
+                                ] : []),
                                 ['Env Vars', envPairs.filter(p => p.key).length > 0 ? envPairs.filter(p => p.key).map(p => `${p.key}=${p.value}`).join(', ') : '(none)'],
                                 ['Memory', `${form.memory_mb}MB`],
                                 ['CPU', `${(form.cpu_millicores / 1000).toFixed(1)} cores`],
@@ -381,7 +477,7 @@ function CreateJobWizard({ onCreated, onClose }: { onCreated: () => void; onClos
                 <button onClick={step > 1 ? () => setStep(step - 1) : onClose} className="btn-ghost btn-sm">
                     {step > 1 ? '← Back' : 'Cancel'}
                 </button>
-                {step < 7 ? (
+                {step < totalSteps ? (
                     <button onClick={() => setStep(step + 1)} disabled={step === 1 && !form.name} className="btn btn-primary btn-sm">
                         Next →
                     </button>
