@@ -8,11 +8,13 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/orbex-dev/orbex/internal/compose"
 	"github.com/orbex-dev/orbex/internal/database"
 	"github.com/orbex-dev/orbex/internal/docker"
 	"github.com/orbex-dev/orbex/internal/models"
@@ -219,6 +221,12 @@ func (w *Worker) executeRun(job models.Job, runID, queueID uuid.UUID) {
 		WHERE id = $2
 	`, startedAt, runID); err != nil {
 		log.Printf("[worker] ERROR marking run %s as running: %v", runID, err)
+		return
+	}
+
+	// Handle compose source type separately
+	if job.SourceType == "compose" {
+		w.executeComposeRun(ctx, job, runID, queueID, startedAt)
 		return
 	}
 
@@ -508,4 +516,99 @@ func scriptCommand(lang, scriptPath string) []string {
 	default:
 		return []string{"bash", scriptPath}
 	}
+}
+
+// executeComposeRun handles the execution of compose-type jobs.
+func (w *Worker) executeComposeRun(ctx context.Context, job models.Job, runID, queueID uuid.UUID, startedAt time.Time) {
+	defer w.cleanupQueue(ctx, queueID)
+
+	if w.storage == nil {
+		w.failRun(ctx, runID, startedAt, "storage client not available for compose jobs")
+		return
+	}
+
+	// Download compose file from MinIO
+	prefix := fmt.Sprintf("uploads/%s/%s/", job.UserID, job.ID)
+	objects, err := w.storage.List(ctx, prefix)
+	if err != nil || len(objects) == 0 {
+		w.failRun(ctx, runID, startedAt, "no compose file found in storage")
+		return
+	}
+
+	// Find docker-compose.yml
+	var composeKey string
+	for _, obj := range objects {
+		name := strings.ToLower(filepath.Base(obj.Key))
+		if name == "docker-compose.yml" || name == "docker-compose.yaml" || name == "compose.yml" || name == "compose.yaml" {
+			composeKey = obj.Key
+			break
+		}
+	}
+	if composeKey == "" {
+		w.failRun(ctx, runID, startedAt, "no docker-compose.yml found in uploaded files")
+		return
+	}
+
+	reader, err := w.storage.Download(ctx, composeKey)
+	if err != nil {
+		w.failRun(ctx, runID, startedAt, fmt.Sprintf("failed to download compose file: %v", err))
+		return
+	}
+	data, err := io.ReadAll(reader)
+	reader.Close()
+	if err != nil {
+		w.failRun(ctx, runID, startedAt, fmt.Sprintf("failed to read compose file: %v", err))
+		return
+	}
+
+	// Parse compose file
+	cf, err := compose.Parse(data)
+	if err != nil {
+		w.failRun(ctx, runID, startedAt, fmt.Sprintf("failed to parse compose file: %v", err))
+		return
+	}
+
+	log.Printf("[worker] Running compose deployment for job %s (run %s) with %d services", job.Name, runID, len(cf.Services))
+
+	// Run compose orchestration
+	orch := compose.NewOrchestrator(w.docker)
+	result := orch.Run(ctx, cf, job.ID, job.Env)
+
+	// Build combined logs
+	var allLogs strings.Builder
+	for svcName, svcLogs := range result.Logs {
+		allLogs.WriteString(fmt.Sprintf("=== %s ===\n%s\n", svcName, svcLogs))
+	}
+	logsTail := allLogs.String()
+	if len(logsTail) > 50000 {
+		logsTail = logsTail[len(logsTail)-50000:]
+	}
+
+	duration := time.Since(startedAt).Milliseconds()
+
+	if result.Error != nil {
+		w.failRun(ctx, runID, startedAt, fmt.Sprintf("compose error: %v", result.Error))
+		// Still store logs
+		_, _ = w.db.Pool.Exec(ctx, `UPDATE job_runs SET logs_tail = $1 WHERE id = $2`, logsTail, runID)
+		return
+	}
+
+	exitCode := result.ExitCode
+	status := models.RunStatusSucceeded
+	if exitCode != 0 {
+		status = models.RunStatusFailed
+	}
+
+	_, _ = w.db.Pool.Exec(ctx, `
+		UPDATE job_runs
+		SET status = $1, exit_code = $2, finished_at = now(),
+		    duration_ms = $3, logs_tail = $4
+		WHERE id = $5
+	`, status, exitCode, duration, logsTail, runID)
+
+	if status == models.RunStatusSucceeded {
+		w.updateJobStats(ctx, job.ID, duration)
+	}
+
+	log.Printf("[worker] Compose run %s completed: %s (exit=%d, duration=%dms)", runID, status, exitCode, duration)
 }
