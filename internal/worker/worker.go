@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/orbex-dev/orbex/internal/database"
 	"github.com/orbex-dev/orbex/internal/docker"
 	"github.com/orbex-dev/orbex/internal/models"
+	"github.com/orbex-dev/orbex/internal/storage"
 )
 
 // Config holds worker configuration.
@@ -33,9 +35,10 @@ func DefaultConfig() Config {
 
 // Worker polls the job_queue and executes runs.
 type Worker struct {
-	db     *database.DB
-	docker *docker.Client
-	cfg    Config
+	db      *database.DB
+	docker  *docker.Client
+	storage *storage.Client
+	cfg     Config
 
 	activeRuns atomic.Int32
 	wg         sync.WaitGroup
@@ -43,7 +46,7 @@ type Worker struct {
 }
 
 // New creates a new Worker.
-func New(db *database.DB, dockerClient *docker.Client, cfg Config) *Worker {
+func New(db *database.DB, dockerClient *docker.Client, storageClient *storage.Client, cfg Config) *Worker {
 	if cfg.MaxConcurrent <= 0 {
 		cfg.MaxConcurrent = 5
 	}
@@ -52,10 +55,11 @@ func New(db *database.DB, dockerClient *docker.Client, cfg Config) *Worker {
 	}
 
 	return &Worker{
-		db:     db,
-		docker: dockerClient,
-		cfg:    cfg,
-		stopCh: make(chan struct{}),
+		db:      db,
+		docker:  dockerClient,
+		storage: storageClient,
+		cfg:     cfg,
+		stopCh:  make(chan struct{}),
 	}
 }
 
@@ -110,6 +114,7 @@ type queuedJob struct {
 	QueueID        uuid.UUID
 	RunID          uuid.UUID
 	JobID          uuid.UUID
+	UserID         uuid.UUID
 	JobName        string
 	Image          string
 	Command        []string
@@ -119,6 +124,7 @@ type queuedJob struct {
 	TimeoutSeconds int
 	Script         *string
 	ScriptLang     *string
+	SourceType     string
 }
 
 // pollAndExecute claims one job from the queue using SKIP LOCKED and executes it.
@@ -131,9 +137,9 @@ func (w *Worker) pollAndExecute(ctx context.Context) {
 	var qj queuedJob
 	err = tx.QueryRow(ctx, `
 		SELECT q.id, q.run_id, q.job_id,
-		       j.name, j.image, j.command, j.env,
+		       j.user_id, j.name, j.image, j.command, j.env,
 		       j.memory_mb, j.cpu_millicores, j.timeout_seconds,
-		       j.script, j.script_lang
+		       j.script, j.script_lang, j.source_type
 		FROM job_queue q
 		JOIN jobs j ON j.id = q.job_id
 		WHERE q.picked_at IS NULL
@@ -143,9 +149,9 @@ func (w *Worker) pollAndExecute(ctx context.Context) {
 		FOR UPDATE OF q SKIP LOCKED
 	`).Scan(
 		&qj.QueueID, &qj.RunID, &qj.JobID,
-		&qj.JobName, &qj.Image, &qj.Command, &qj.EnvJSON,
+		&qj.UserID, &qj.JobName, &qj.Image, &qj.Command, &qj.EnvJSON,
 		&qj.MemoryMB, &qj.CPUMillicores, &qj.TimeoutSeconds,
-		&qj.Script, &qj.ScriptLang,
+		&qj.Script, &qj.ScriptLang, &qj.SourceType,
 	)
 	if err != nil {
 		tx.Rollback(ctx)
@@ -169,6 +175,7 @@ func (w *Worker) pollAndExecute(ctx context.Context) {
 
 	job := models.Job{
 		ID:             qj.JobID,
+		UserID:         qj.UserID,
 		Name:           qj.JobName,
 		Image:          qj.Image,
 		Command:        qj.Command,
@@ -178,6 +185,7 @@ func (w *Worker) pollAndExecute(ctx context.Context) {
 		TimeoutSeconds: qj.TimeoutSeconds,
 		Script:         qj.Script,
 		ScriptLang:     qj.ScriptLang,
+		SourceType:     qj.SourceType,
 	}
 
 	// Execute in background
@@ -243,6 +251,48 @@ func (w *Worker) executeRun(job models.Job, runID, queueID uuid.UUID) {
 		command = scriptCommand(*job.ScriptLang, containerScriptPath)
 		scriptCleanup = func() { os.Remove(scriptPath) }
 		log.Printf("[worker] Mounting inline script (%s) for run %s", *job.ScriptLang, runID)
+	}
+
+	// Handle upload source type — download files from MinIO
+	var uploadCleanup func()
+	if job.SourceType == "upload" && w.storage != nil {
+		workspaceDir := filepath.Join(os.TempDir(), "orbex-uploads", runID.String())
+		os.MkdirAll(workspaceDir, 0755)
+
+		prefix := fmt.Sprintf("uploads/%s/%s/", job.UserID, job.ID)
+		objects, err := w.storage.List(ctx, prefix)
+		if err != nil {
+			w.failRun(ctx, runID, startedAt, fmt.Sprintf("failed to list uploaded files: %v", err))
+			w.cleanupQueue(ctx, queueID)
+			return
+		}
+
+		for _, obj := range objects {
+			filename := filepath.Base(obj.Key)
+			reader, err := w.storage.Download(ctx, obj.Key)
+			if err != nil {
+				w.failRun(ctx, runID, startedAt, fmt.Sprintf("failed to download %s: %v", filename, err))
+				w.cleanupQueue(ctx, queueID)
+				os.RemoveAll(workspaceDir)
+				return
+			}
+			localPath := filepath.Join(workspaceDir, filename)
+			file, err := os.Create(localPath)
+			if err != nil {
+				reader.Close()
+				w.failRun(ctx, runID, startedAt, fmt.Sprintf("failed to create %s: %v", filename, err))
+				w.cleanupQueue(ctx, queueID)
+				os.RemoveAll(workspaceDir)
+				return
+			}
+			io.Copy(file, reader)
+			file.Close()
+			reader.Close()
+		}
+
+		binds = append(binds, workspaceDir+":/orbex/workspace:ro")
+		uploadCleanup = func() { os.RemoveAll(workspaceDir) }
+		log.Printf("[worker] Mounted %d uploaded files for run %s", len(objects), runID)
 	}
 
 	containerID, err := w.docker.CreateContainer(ctx, docker.ContainerConfig{
@@ -384,6 +434,9 @@ func (w *Worker) executeRun(job models.Job, runID, queueID uuid.UUID) {
 	_ = w.docker.RemoveContainer(ctx, containerID)
 	if scriptCleanup != nil {
 		scriptCleanup()
+	}
+	if uploadCleanup != nil {
+		uploadCleanup()
 	}
 
 	// Send notification if configured

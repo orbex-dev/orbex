@@ -76,7 +76,7 @@ func main() {
 	log.Println("✓ MinIO connected")
 
 	// Start background worker
-	w := worker.New(db, dockerClient, worker.Config{
+	w := worker.New(db, dockerClient, storageClient, worker.Config{
 		MaxConcurrent: cfg.MaxConcurrentRuns,
 		PollInterval:  time.Second,
 	})

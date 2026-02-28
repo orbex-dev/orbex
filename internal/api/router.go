@@ -37,6 +37,7 @@ func NewRouter(db *database.DB, dockerClient *docker.Client, storageClient *stor
 	authHandler := NewAuthHandler(db)
 	jobHandler := NewJobHandler(db)
 	runHandler := NewRunHandler(db, dockerClient)
+	uploadHandler := NewUploadHandler(db, storageClient)
 
 	// Webhook trigger (no auth — uses webhook token in URL)
 	r.Post("/api/v1/webhooks/{token}/trigger", runHandler.WebhookTrigger)
@@ -69,6 +70,11 @@ func NewRouter(db *database.DB, dockerClient *docker.Client, storageClient *stor
 			r.Get("/jobs/{jobID}", jobHandler.Get)
 			r.Patch("/jobs/{jobID}", jobHandler.Update)
 			r.Delete("/jobs/{jobID}", jobHandler.Delete)
+
+			// File uploads
+			r.Post("/jobs/{jobID}/upload", uploadHandler.Upload)
+			r.Get("/jobs/{jobID}/files", uploadHandler.ListFiles)
+			r.Delete("/jobs/{jobID}/files/{filename}", uploadHandler.DeleteFile)
 
 			// Job runs
 			r.Post("/jobs/{jobID}/run", runHandler.TriggerRun)
