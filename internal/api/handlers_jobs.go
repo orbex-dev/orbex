@@ -34,9 +34,22 @@ func (h *JobHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Name == "" || req.Image == "" {
+	if req.Name == "" {
 		writeJSON(w, http.StatusBadRequest, models.ErrorResponse{
-			Error: "validation_error", Message: "Name and image are required",
+			Error: "validation_error", Message: "Name is required",
+		})
+		return
+	}
+
+	// Default source type
+	if req.SourceType == "" {
+		req.SourceType = "image"
+	}
+
+	// Image required only for 'image' source type
+	if req.SourceType == "image" && req.Image == "" {
+		writeJSON(w, http.StatusBadRequest, models.ErrorResponse{
+			Error: "validation_error", Message: "Image is required for docker image source type",
 		})
 		return
 	}
@@ -56,19 +69,26 @@ func (h *JobHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	envJSON, _ := json.Marshal(req.Env)
+	sourceConfigJSON := req.SourceConfig
+	if sourceConfigJSON == nil {
+		sourceConfigJSON = []byte("{}")
+	}
 
 	var job models.Job
 	err := h.db.Pool.QueryRow(r.Context(), `
-		INSERT INTO jobs (user_id, name, image, command, env, memory_mb, cpu_millicores, timeout_seconds, schedule, script, script_lang)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-		RETURNING id, user_id, name, image, command, env, memory_mb, cpu_millicores, timeout_seconds, schedule, script, script_lang, is_active, created_at, updated_at
+		INSERT INTO jobs (user_id, name, image, command, env, memory_mb, cpu_millicores, timeout_seconds, schedule, script, script_lang, source_type, github_repo, github_branch, github_token_id, dockerfile_path, source_config)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		RETURNING id, user_id, name, image, command, env, memory_mb, cpu_millicores, timeout_seconds, schedule, script, script_lang, source_type, github_repo, github_branch, github_token_id, dockerfile_path, source_config, is_active, created_at, updated_at
 	`, user.ID, req.Name, req.Image, req.Command, envJSON,
 		req.MemoryMB, req.CPUMillicores, req.TimeoutSeconds, req.Schedule,
-		req.Script, req.ScriptLang,
+		req.Script, req.ScriptLang, req.SourceType,
+		req.GithubRepo, req.GithubBranch, req.GithubTokenID, req.DockerfilePath, sourceConfigJSON,
 	).Scan(
 		&job.ID, &job.UserID, &job.Name, &job.Image, &job.Command,
 		&envJSON, &job.MemoryMB, &job.CPUMillicores, &job.TimeoutSeconds,
-		&job.Schedule, &job.Script, &job.ScriptLang, &job.IsActive, &job.CreatedAt, &job.UpdatedAt,
+		&job.Schedule, &job.Script, &job.ScriptLang,
+		&job.SourceType, &job.GithubRepo, &job.GithubBranch, &job.GithubTokenID, &job.DockerfilePath, &job.SourceConfig,
+		&job.IsActive, &job.CreatedAt, &job.UpdatedAt,
 	)
 
 	if err != nil {
@@ -94,7 +114,9 @@ func (h *JobHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := h.db.Pool.Query(r.Context(), `
 		SELECT id, user_id, name, image, command, env, memory_mb, cpu_millicores,
-		       timeout_seconds, schedule, script, script_lang, is_active, created_at, updated_at
+		       timeout_seconds, schedule, script, script_lang,
+		       source_type, github_repo, github_branch, github_token_id, dockerfile_path, source_config,
+		       is_active, created_at, updated_at
 		FROM jobs
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -114,7 +136,9 @@ func (h *JobHandler) List(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(
 			&job.ID, &job.UserID, &job.Name, &job.Image, &job.Command,
 			&envJSON, &job.MemoryMB, &job.CPUMillicores, &job.TimeoutSeconds,
-			&job.Schedule, &job.Script, &job.ScriptLang, &job.IsActive, &job.CreatedAt, &job.UpdatedAt,
+			&job.Schedule, &job.Script, &job.ScriptLang,
+			&job.SourceType, &job.GithubRepo, &job.GithubBranch, &job.GithubTokenID, &job.DockerfilePath, &job.SourceConfig,
+			&job.IsActive, &job.CreatedAt, &job.UpdatedAt,
 		); err != nil {
 			continue
 		}
@@ -143,13 +167,17 @@ func (h *JobHandler) Get(w http.ResponseWriter, r *http.Request) {
 	var envJSON []byte
 	err = h.db.Pool.QueryRow(r.Context(), `
 		SELECT id, user_id, name, image, command, env, memory_mb, cpu_millicores,
-		       timeout_seconds, schedule, script, script_lang, is_active, created_at, updated_at
+		       timeout_seconds, schedule, script, script_lang,
+		       source_type, github_repo, github_branch, github_token_id, dockerfile_path, source_config,
+		       is_active, created_at, updated_at
 		FROM jobs
 		WHERE id = $1 AND user_id = $2
 	`, jobID, user.ID).Scan(
 		&job.ID, &job.UserID, &job.Name, &job.Image, &job.Command,
 		&envJSON, &job.MemoryMB, &job.CPUMillicores, &job.TimeoutSeconds,
-		&job.Schedule, &job.Script, &job.ScriptLang, &job.IsActive, &job.CreatedAt, &job.UpdatedAt,
+		&job.Schedule, &job.Script, &job.ScriptLang,
+		&job.SourceType, &job.GithubRepo, &job.GithubBranch, &job.GithubTokenID, &job.DockerfilePath, &job.SourceConfig,
+		&job.IsActive, &job.CreatedAt, &job.UpdatedAt,
 	)
 
 	if err != nil {
@@ -274,10 +302,35 @@ func (h *JobHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if req.ScriptLang != nil {
 		setClauses = append(setClauses, fmt.Sprintf("script_lang = $%d", argIdx))
 		if *req.ScriptLang == "" {
-			args = append(args, nil) // clear script_lang
+			args = append(args, nil)
 		} else {
 			args = append(args, *req.ScriptLang)
 		}
+		argIdx++
+	}
+	if req.SourceType != nil {
+		setClauses = append(setClauses, fmt.Sprintf("source_type = $%d", argIdx))
+		args = append(args, *req.SourceType)
+		argIdx++
+	}
+	if req.GithubRepo != nil {
+		setClauses = append(setClauses, fmt.Sprintf("github_repo = $%d", argIdx))
+		args = append(args, *req.GithubRepo)
+		argIdx++
+	}
+	if req.GithubBranch != nil {
+		setClauses = append(setClauses, fmt.Sprintf("github_branch = $%d", argIdx))
+		args = append(args, *req.GithubBranch)
+		argIdx++
+	}
+	if req.DockerfilePath != nil {
+		setClauses = append(setClauses, fmt.Sprintf("dockerfile_path = $%d", argIdx))
+		args = append(args, *req.DockerfilePath)
+		argIdx++
+	}
+	if req.SourceConfig != nil {
+		setClauses = append(setClauses, fmt.Sprintf("source_config = $%d", argIdx))
+		args = append(args, *req.SourceConfig)
 		argIdx++
 	}
 
@@ -293,7 +346,7 @@ func (h *JobHandler) Update(w http.ResponseWriter, r *http.Request) {
 	query := fmt.Sprintf(`
 		UPDATE jobs SET %s
 		WHERE id = $%d AND user_id = $%d
-		RETURNING id, user_id, name, image, command, env, memory_mb, cpu_millicores, timeout_seconds, schedule, script, script_lang, is_active, created_at, updated_at
+		RETURNING id, user_id, name, image, command, env, memory_mb, cpu_millicores, timeout_seconds, schedule, script, script_lang, source_type, github_repo, github_branch, github_token_id, dockerfile_path, source_config, is_active, created_at, updated_at
 	`, joinStrings(setClauses, ", "), argIdx, argIdx+1)
 
 	var job models.Job
@@ -301,7 +354,9 @@ func (h *JobHandler) Update(w http.ResponseWriter, r *http.Request) {
 	err = h.db.Pool.QueryRow(r.Context(), query, args...).Scan(
 		&job.ID, &job.UserID, &job.Name, &job.Image, &job.Command,
 		&envJSON, &job.MemoryMB, &job.CPUMillicores, &job.TimeoutSeconds,
-		&job.Schedule, &job.Script, &job.ScriptLang, &job.IsActive, &job.CreatedAt, &job.UpdatedAt,
+		&job.Schedule, &job.Script, &job.ScriptLang,
+		&job.SourceType, &job.GithubRepo, &job.GithubBranch, &job.GithubTokenID, &job.DockerfilePath, &job.SourceConfig,
+		&job.IsActive, &job.CreatedAt, &job.UpdatedAt,
 	)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, models.ErrorResponse{

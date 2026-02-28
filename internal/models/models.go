@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -53,6 +54,12 @@ type Job struct {
 	WebhookToken   *string           `json:"webhook_token,omitempty"`
 	Script         *string           `json:"script,omitempty"`
 	ScriptLang     *string           `json:"script_lang,omitempty"`
+	SourceType     string            `json:"source_type"`
+	GithubRepo     *string           `json:"github_repo,omitempty"`
+	GithubBranch   *string           `json:"github_branch,omitempty"`
+	GithubTokenID  *uuid.UUID        `json:"github_token_id,omitempty"`
+	DockerfilePath *string           `json:"dockerfile_path,omitempty"`
+	SourceConfig   json.RawMessage   `json:"source_config,omitempty"`
 	IsActive       bool              `json:"is_active"`
 	CreatedAt      time.Time         `json:"created_at"`
 	UpdatedAt      time.Time         `json:"updated_at"`
@@ -101,6 +108,12 @@ type CreateJobRequest struct {
 	Schedule       *string           `json:"schedule,omitempty"`
 	Script         *string           `json:"script,omitempty"`
 	ScriptLang     *string           `json:"script_lang,omitempty"`
+	SourceType     string            `json:"source_type,omitempty"`
+	GithubRepo     *string           `json:"github_repo,omitempty"`
+	GithubBranch   *string           `json:"github_branch,omitempty"`
+	GithubTokenID  *uuid.UUID        `json:"github_token_id,omitempty"`
+	DockerfilePath *string           `json:"dockerfile_path,omitempty"`
+	SourceConfig   json.RawMessage   `json:"source_config,omitempty"`
 }
 
 // UpdateJobRequest is the payload for partially updating a job (PATCH).
@@ -117,6 +130,11 @@ type UpdateJobRequest struct {
 	IsActive       *bool              `json:"is_active,omitempty"`
 	Script         *string            `json:"script,omitempty"`
 	ScriptLang     *string            `json:"script_lang,omitempty"`
+	SourceType     *string            `json:"source_type,omitempty"`
+	GithubRepo     *string            `json:"github_repo,omitempty"`
+	GithubBranch   *string            `json:"github_branch,omitempty"`
+	DockerfilePath *string            `json:"dockerfile_path,omitempty"`
+	SourceConfig   *json.RawMessage   `json:"source_config,omitempty"`
 }
 
 // TriggerRunRequest is the optional payload for triggering a run with overrides.
@@ -145,4 +163,27 @@ type APIKeyResponse struct {
 type ErrorResponse struct {
 	Error   string `json:"error"`
 	Message string `json:"message,omitempty"`
+}
+
+// GithubToken represents a stored GitHub OAuth token.
+type GithubToken struct {
+	ID             uuid.UUID `json:"id"`
+	UserID         uuid.UUID `json:"user_id"`
+	AccessToken    string    `json:"-"`
+	GithubUsername string    `json:"github_username"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+// BuildQueueItem represents a pending or completed image build.
+type BuildQueueItem struct {
+	ID           uuid.UUID  `json:"id"`
+	JobID        uuid.UUID  `json:"job_id"`
+	UserID       uuid.UUID  `json:"user_id"`
+	Status       string     `json:"status"` // pending, building, succeeded, failed
+	ImageTag     *string    `json:"image_tag,omitempty"`
+	BuildLog     *string    `json:"build_log,omitempty"`
+	ErrorMessage *string    `json:"error_message,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	FinishedAt   *time.Time `json:"finished_at,omitempty"`
 }
